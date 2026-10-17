@@ -237,6 +237,8 @@ paths:
           $ref: "#/components/responses/Problem"
         "413":
           $ref: "#/components/responses/Problem"
+        "415":
+          $ref: "#/components/responses/Problem"
         "422":
           $ref: "#/components/responses/Problem"
         "429":
@@ -266,7 +268,15 @@ paths:
                 $ref: "#/components/schemas/RefreshDeviceResponse"
         "400":
           $ref: "#/components/responses/Problem"
+        "401":
+          $ref: "#/components/responses/Problem"
         "404":
+          $ref: "#/components/responses/Problem"
+        "409":
+          $ref: "#/components/responses/Problem"
+        "413":
+          $ref: "#/components/responses/Problem"
+        "415":
           $ref: "#/components/responses/Problem"
         "422":
           $ref: "#/components/responses/Problem"
@@ -278,14 +288,17 @@ paths:
       summary: Delete a subscription
       description: |
         Authorized by the subscription secret or by a signature from the instance the subscription is bound
-        to. Idempotent.
+        to. Deleting a gone subscription succeeds. Unknown, foreign and already deleted subscriptions all
+        return 404 subscription_not_found, so callers should treat 404 as success.
       security:
         - subscriptionSecret: []
         - instanceSignature: []
       responses:
         "204":
-          description: Deleted, or already gone.
+          description: Deleted (including a subscription whose status is gone).
         "401":
+          $ref: "#/components/responses/Problem"
+        "403":
           $ref: "#/components/responses/Problem"
         "404":
           $ref: "#/components/responses/Problem"

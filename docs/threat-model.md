@@ -60,7 +60,7 @@ An instance operator abuses the gateway or the users registered for it.
 
 | Threat | Mitigation |
 |---|---|
-| Pushes to devices registered for other instances | Every subscription is bound to one origin. A signed push whose key belongs to another instance gets `subscription_not_found`. *Test: cross-instance push is rejected.* |
+| Pushes to devices registered for other instances | Every subscription is bound to one origin. A signed push whose key belongs to another instance gets `subscription_not_found`. *Test: cross-instance push is rejected (Phase 4); cross-instance delete is rejected (`TestDeviceCrossInstanceMisuse`).* |
 | Spam to its own subscribers | Per-instance daily quota, per-device hourly cap, urgency and TTL limits, automatic temporary blocks and a manual blocklist with a visible reason. |
 | Impersonating another app or sender in the notification text | The client composes the notification from structured fields and always shows the instance name; the undecrypted fallback is gateway-controlled text. |
 | Registering as someone else's origin | Domain verification through the origin's own well-known document. Squatted pending registrations never verify and expire. A recovery key for someone else's verified origin can only call `verify`, so it reveals nothing about the instance. *Test: `TestRecovery`, `TestPrune`.* |
@@ -71,11 +71,11 @@ An instance operator abuses the gateway or the users registered for it.
 
 | Threat | Mitigation |
 |---|---|
-| Mass-registering fake devices to exhaust quotas or storage | Per-IP and per-token registration limits, short unrefreshed expiry, attestation on the official gateway (Phase 8). Registration is only possible for verified instances. |
+| Mass-registering fake devices to exhaust quotas or storage | Per-IP (IPv6 per /64) and per-token registration limits, short unrefreshed expiry, attestation on the official gateway (Phase 8). Registration is only possible for verified, active instances. *Test: `TestDeviceRateLimits`, `TestDeviceRegistrationNeedsActiveInstance`.* |
 | Registering someone else's token for a rogue instance, to spam that person | Needs the victim's platform token, which providers treat as secret. With a token, a rogue instance can only push what the rogue operator writes, within the same quotas and with the instance name shown. |
 | Registering for a real instance to read someone else's notifications | Content is encrypted to a key the registrant controls and shares with the instance. An attacker gets only what the instance would send to the attacker's own account. |
 | Taking over another device's subscription by re-registering its token | Needs the token. The previous secret is invalidated, so a rightful owner who still holds the token can reclaim it. |
-| Probing which subscriptions exist | Missing, unauthorized and foreign subscriptions return the same `404`. IDs and secrets are 128 bit random values. |
+| Probing which subscriptions exist | Missing, unauthorized and foreign subscriptions return the same `404`. IDs are 128-bit and secrets 256-bit random values. *Test: `TestDeviceCrossInstanceMisuse`.* |
 
 ### Stolen instance key
 

@@ -23,8 +23,10 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/parkerbrown98/gotalk-gateway/internal/apps"
 	"github.com/parkerbrown98/gotalk-gateway/internal/blocklist"
 	"github.com/parkerbrown98/gotalk-gateway/internal/config"
+	"github.com/parkerbrown98/gotalk-gateway/internal/devices"
 	"github.com/parkerbrown98/gotalk-gateway/internal/instances"
 	"github.com/parkerbrown98/gotalk-gateway/internal/nonce"
 	"github.com/parkerbrown98/gotalk-gateway/internal/problem"
@@ -101,8 +103,16 @@ type gw struct {
 	srv     *Server
 	pool    *pgxpool.Pool
 	svc     *instances.Service
+	devices *devices.Service
 	origins *fakeOrigins
 	bl      *blocklist.Cache
+}
+
+// testApps are the apps every test gateway serves.
+var testApps = []apps.App{
+	{ID: "gotalk", Name: "Gotalk", IOS: &apps.IOS{BundleID: "app.example.gotalk"},
+		Android: &apps.Android{PackageName: "app.example.gotalk"}, Web: &apps.Web{VAPIDPublicKey: testVAPIDKey}},
+	{ID: "droid", Name: "Droid", Android: &apps.Android{PackageName: "com.example.droid"}},
 }
 
 type gwOpts struct {
@@ -127,13 +137,19 @@ func newGateway(t *testing.T, opts ...func(*gwOpts)) *gw {
 	origins := &fakeOrigins{keys: map[string]map[string]bool{}, err: map[string]error{}, wk: wellknown.New(wellknown.Options{AllowedPorts: []int{8443}})}
 	bl := blocklist.NewCache(o.pool, log)
 	svc := instances.New(o.pool, origins, bl, instances.Options{Logger: log})
+	registry := apps.NewRegistry(o.pool)
+	_, err = registry.Sync(context.Background(), testApps)
+	require.NoError(t, err)
+	devicesSvc := devices.New(o.pool, registry, bl, devices.Options{
+		ExpiryDays: cfg.Gateway.SubscriptionExpiryDays, WebPushHosts: devices.DefaultWebPushHosts, Logger: log,
+	})
 	limiter, err := ratelimit.New(o.rdb, o.rates)
 	require.NoError(t, err)
 	srv := New(Deps{
-		Config: cfg, Logger: log, Version: "test", Apps: &fakeApps{}, Metrics: NewMetrics("test"),
-		Instances: svc, Nonces: nonce.New(o.rdb), Limiter: limiter, Blocklist: bl,
+		Config: cfg, Logger: log, Version: "test", Apps: registry, Metrics: NewMetrics("test"),
+		Instances: svc, Devices: devicesSvc, Nonces: nonce.New(o.rdb), Limiter: limiter, Blocklist: bl,
 	})
-	return &gw{t: t, srv: srv, pool: o.pool, svc: svc, origins: origins, bl: bl}
+	return &gw{t: t, srv: srv, pool: o.pool, svc: svc, devices: devicesSvc, origins: origins, bl: bl}
 }
 
 type resp struct {

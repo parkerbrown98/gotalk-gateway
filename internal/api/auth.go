@@ -39,6 +39,9 @@ const (
 
 const (
 	metaAuth = "gotalk.auth"
+	// metaAuthOptional makes the signature optional: requests without signing headers reach
+	// the handler without a principal (for endpoints that also accept another credential).
+	metaAuthOptional = "gotalk.auth_optional"
 	// metaIPRule names the per-IP rate limit rule of an unsigned operation.
 	metaIPRule = "gotalk.ip_rule"
 	// defaultMaxBody is the protocol's default request body limit.
@@ -150,12 +153,27 @@ func (s *Server) signedRequests(ctx huma.Context, next func(huma.Context)) {
 		next(ctx)
 		return
 	}
+	if optional, _ := op.Metadata[metaAuthOptional].(bool); optional && !hasSigningHeaders(ctx) {
+		next(ctx)
+		return
+	}
 	p, prob := s.authenticate(ctx, op, level)
 	if prob != nil {
 		abort(ctx, prob)
 		return
 	}
 	next(huma.WithValue(ctx, principalKey{}, p))
+}
+
+// hasSigningHeaders reports whether a request attempts instance authentication. Such a
+// request is always authenticated as an instance and never falls back to another credential.
+func hasSigningHeaders(ctx huma.Context) bool {
+	for _, h := range []string{signing.HeaderSignature, signing.HeaderKeyID, signing.HeaderTimestamp, signing.HeaderNonce} {
+		if ctx.Header(h) != "" {
+			return true
+		}
+	}
+	return false
 }
 
 func (s *Server) authenticate(ctx huma.Context, op *huma.Operation, level authLevel) (instances.Principal, *problem.Problem) {

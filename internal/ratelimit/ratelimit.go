@@ -20,6 +20,12 @@ const (
 	Signed = "signed"
 	// Verification limits on-demand verification fetches per signing key.
 	Verification = "verification"
+	// DeviceRegistration limits POST /v1/devices per client IP.
+	DeviceRegistration = "device_registration"
+	// DeviceToken limits registering one platform token, keyed by its hash.
+	DeviceToken = "device_token"
+	// DeviceUpdate limits refreshes per subscription.
+	DeviceUpdate = "device_update"
 )
 
 type Result struct {

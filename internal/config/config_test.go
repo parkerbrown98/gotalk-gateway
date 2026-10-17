@@ -175,7 +175,17 @@ func TestInstancesAndRateLimit(t *testing.T) {
 	require.NoError(t, err)
 	assert.False(t, cfg.Instances.AllowHTTP)
 	assert.Empty(t, cfg.Instances.AllowedPorts)
-	assert.Equal(t, map[string]string{"registration": "5-H", "signed": "1200-M", "verification": "12-H"}, cfg.RateLimit.Rules())
+	assert.Equal(t, map[string]string{
+		"registration": "5-H", "signed": "1200-M", "verification": "12-H",
+		"device_registration": "60-H", "device_token": "10-H", "device_update": "60-H",
+	}, cfg.RateLimit.Rules())
+	assert.Contains(t, cfg.Devices.WebPushHosts, "fcm.googleapis.com")
+
+	cfg, err = load("", map[string]string{"devices.web_push_hosts": "Push.Example., fcm.googleapis.com"}, environ())
+	require.NoError(t, err)
+	assert.Equal(t, []string{"push.example", "fcm.googleapis.com"}, cfg.Devices.WebPushHosts)
+	_, err = load("", map[string]string{"devices.web_push_hosts": "https://push.example/x"}, environ())
+	assert.ErrorContains(t, err, "devices.web_push_hosts")
 
 	cfg, err = load("", map[string]string{"ratelimit.enabled": "false"}, environ(
 		"GOTALK_GATEWAY_INSTANCES_ALLOWED_PORTS=8443, 9443",

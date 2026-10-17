@@ -5,9 +5,9 @@ end-to-end encrypted notification payloads to the gateway, and the gateway forwa
 Push. The gateway never sees notification content. [docs/gateway-plan.md](docs/gateway-plan.md) explains why it
 exists, and [docs/protocol.md](docs/protocol.md) specifies the protocol.
 
-**Status:** Phases 1 and 2 are done. The gateway serves discovery, health, readiness and metrics. Instances can
-register, prove domain control, rotate and recover keys, and make Ed25519-signed requests. Device subscriptions
-and delivery come in Phases 3 to 5.
+**Status:** Phases 1 to 3 are done. The gateway serves discovery, health, readiness and metrics. Instances can
+register, prove domain control, rotate and recover keys, and make Ed25519-signed requests. Clients can register,
+refresh and delete device subscriptions. Push delivery comes in Phases 4 and 5.
 
 ## Quick start
 
@@ -34,6 +34,8 @@ To run from source against the Compose database: `docker compose up -d postgres 
 | `GET`, `DELETE /v1/instances/{id}` | Instance status, keys and usage; deregistration. Signed. |
 | `POST /v1/instances/{id}/verify` | Fetch the origin's `/.well-known/gotalk-instance` and activate advertised keys. Signed. |
 | `POST /v1/instances/{id}/keys`, `DELETE /v1/instances/{id}/keys/{key_id}` | Key rotation. Signed. |
+| `POST /v1/devices` | Register an APNs or FCM token or a Web Push endpoint for one app and instance. Returns `subscription_id` and a `subscription_secret`. |
+| `PUT`, `DELETE /v1/devices/{id}` | Refresh or replace the token, and delete. Authorized by the subscription secret (DELETE also by the instance's signature). |
 | `GET /v1/openapi.json`, `/v1/openapi.yaml` | OpenAPI 3.1 spec of the implemented endpoints. The full contract is [docs/openapi.yaml](docs/openapi.yaml). |
 
 Errors use `application/problem+json` with a stable `code` ([docs/protocol.md](docs/protocol.md#errors)). Every

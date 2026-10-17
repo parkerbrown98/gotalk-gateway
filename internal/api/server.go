@@ -19,6 +19,7 @@ import (
 	"github.com/parkerbrown98/gotalk-gateway/internal/apps"
 	"github.com/parkerbrown98/gotalk-gateway/internal/blocklist"
 	"github.com/parkerbrown98/gotalk-gateway/internal/config"
+	"github.com/parkerbrown98/gotalk-gateway/internal/devices"
 	"github.com/parkerbrown98/gotalk-gateway/internal/instances"
 	"github.com/parkerbrown98/gotalk-gateway/internal/nonce"
 	"github.com/parkerbrown98/gotalk-gateway/internal/problem"
@@ -47,6 +48,7 @@ type Deps struct {
 	Checks    []Check
 	Metrics   *Metrics
 	Instances *instances.Service
+	Devices   *devices.Service
 	// Nonces defaults to an in-memory store, Limiter to no limits and Blocklist to empty.
 	Nonces    nonce.Store
 	Limiter   *ratelimit.Limiter
@@ -124,11 +126,16 @@ func (s *Server) newAPI(r chi.Router, version string) huma.API {
 			Description: "Ed25519 request signature. Also send Gotalk-Key-Id, Gotalk-Timestamp, Gotalk-Nonce and, " +
 				"with a body, Content-Digest. The signing string is defined in docs/protocol.md#request-signing.",
 		},
+		"subscriptionSecret": {
+			Type: "http", Scheme: "bearer",
+			Description: "The subscription_secret returned when the device was registered.",
+		},
 	}
 	api := humachi.New(r, cfg)
 	api.UseMiddleware(s.requireJSON, s.unsignedRules, s.signedRequests)
 	s.registerDiscovery(api)
 	s.registerInstances(api)
+	s.registerDevices(api)
 	return api
 }
 

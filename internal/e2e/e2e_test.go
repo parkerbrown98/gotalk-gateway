@@ -1,7 +1,7 @@
 //go:build e2e
 
 // Package e2e drives a running gateway through instance registration, domain verification,
-// signed requests, key rotation, recovery and deregistration. The test plays the instance:
+// signed requests, key rotation, recovery, device subscriptions and deregistration. The test plays the instance:
 // it serves the well-known document the gateway verifies against. Start the stack with
 // docker-compose.e2e.yml and run `make e2e`.
 package e2e
@@ -16,6 +16,7 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -194,6 +195,33 @@ func TestInstanceFlow(t *testing.T) {
 	expect(t, do(t, "POST", base+"/verify", nil, k3), 200, "")
 	expect(t, do(t, "GET", base, nil, k2), 401, "unknown_key")
 
+	// Devices register for the verified instance and are bound to it.
+	token := strings.Repeat("ab", 32)
+	device := map[string]any{"app_id": "gotalk", "instance_origin": origin, "platform": "ios", "token": token}
+	sub := expect(t, do(t, "POST", "/v1/devices", device, nil), 201, "")
+	subID, secret := sub.body["subscription_id"].(string), sub.body["subscription_secret"].(string)
+	assert.Equal(t, "no-store", sub.header.Get("Cache-Control"))
+	again := expect(t, do(t, "POST", "/v1/devices", device, nil), 201, "")
+	assert.Equal(t, subID, again.body["subscription_id"])
+	bearer := func(s string) func(*http.Request) {
+		return func(r *http.Request) { r.Header.Set("Authorization", "Bearer "+s) }
+	}
+	expect(t, do(t, "PUT", "/v1/devices/"+subID, map[string]any{}, nil, bearer(secret)), 404, "subscription_not_found")
+	secret = again.body["subscription_secret"].(string)
+	expect(t, do(t, "PUT", "/v1/devices/"+subID, map[string]any{"token": strings.Repeat("cd", 32)}, nil, bearer(secret)), 200, "")
+	inst = expect(t, do(t, "GET", base, nil, k3), 200, "")
+	assert.Equal(t, 1.0, inst.body["usage"].(map[string]any)["active_subscriptions"])
+	expect(t, do(t, "DELETE", "/v1/devices/"+subID, nil, k3), 204, "")
+	expect(t, do(t, "DELETE", "/v1/devices/"+subID, nil, nil, bearer(secret)), 404, "subscription_not_found")
+	expect(t, do(t, "POST", "/v1/devices", map[string]any{
+		"app_id": "unknown", "instance_origin": origin, "platform": "ios", "token": token,
+	}, nil), 422, "unknown_app")
+
+	// Deregistration deletes the instance's subscriptions.
+	sub = expect(t, do(t, "POST", "/v1/devices", device, nil), 201, "")
 	expect(t, do(t, "DELETE", base, nil, k3), 204, "")
 	expect(t, do(t, "GET", base, nil, k3), 401, "unknown_key")
+	expect(t, do(t, "PUT", "/v1/devices/"+sub.body["subscription_id"].(string), map[string]any{}, nil,
+		bearer(sub.body["subscription_secret"].(string))), 404, "subscription_not_found")
+	expect(t, do(t, "POST", "/v1/devices", device, nil), 404, "instance_not_found")
 }

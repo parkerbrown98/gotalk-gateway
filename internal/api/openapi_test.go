@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"regexp"
 	"slices"
 	"sort"
 	"strings"
@@ -61,7 +62,33 @@ func TestOpenAPIMatchesContract(t *testing.T) {
 	assert.Subset(t, shared, []string{
 		"Gateway", "App", "GatewayLimits", "Problem",
 		"RegisterInstanceRequest", "RegisterInstanceResponse", "Instance", "InstanceKey", "AddKeyRequest",
+		"RegisterDeviceRequest", "DeviceCommon", "RegisterIosDevice", "RegisterAndroidDevice", "RegisterWebDevice",
+		"RegisterDeviceResponse", "RefreshDeviceRequest", "RefreshDeviceResponse",
 	}, "implemented schemas are compared with the contract")
+}
+
+// Every {param} in a path template must be declared as a path parameter, or the spec is
+// invalid and generated clients cannot call the endpoint.
+func TestPathParametersAreDeclared(t *testing.T) {
+	raw, err := json.Marshal(OpenAPI("test"))
+	require.NoError(t, err)
+	var spec map[string]any
+	require.NoError(t, json.Unmarshal(raw, &spec))
+	template := regexp.MustCompile(`\{([^}]+)\}`)
+	for path, item := range obj(spec["paths"]) {
+		for method, op := range obj(item) {
+			declared := map[string]bool{}
+			params, _ := obj(op)["parameters"].([]any)
+			for _, p := range params {
+				if obj(p)["in"] == "path" {
+					declared[obj(p)["name"].(string)] = true
+				}
+			}
+			for _, m := range template.FindAllStringSubmatch(path, -1) {
+				assert.True(t, declared[m[1]], "%s %s does not declare path parameter %s", strings.ToUpper(method), path, m[1])
+			}
+		}
+	}
 }
 
 // schemaRefOf returns the schema name of the first 2xx JSON response, following one level

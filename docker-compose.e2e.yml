@@ -16,3 +16,4 @@ services:
       # The test registers and verifies repeatedly from one address.
       GOTALK_GATEWAY_RATELIMIT_REGISTRATION: 1000-H
       GOTALK_GATEWAY_RATELIMIT_VERIFICATION: 1000-H
+      GOTALK_GATEWAY_RATELIMIT_DEVICE_TOKEN: 1000-H

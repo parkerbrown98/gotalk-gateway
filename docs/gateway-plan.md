@@ -239,7 +239,7 @@ Deliverables:
   An end-to-end test (`make e2e`, also in CI) runs the same flow against the built container. The contract
   gained `key_not_found` and the additional error responses (no breaking changes).
 
-### Phase 3 — Device subscriptions ⬜
+### Phase 3 — Device subscriptions ✅
 
 - `POST /v1/devices`: register a platform token for one instance origin and one app. Returns `subscription_id` and
   `subscription_secret`. Device keys are not sent to the gateway.
@@ -252,6 +252,43 @@ Deliverables:
 
 Done when a client can register, refresh and delete a subscription, and cross-instance misuse is covered by
 tests.
+
+Deliverables:
+
+- ✅ `POST /v1/devices` for iOS, Android and web. Registration needs an active instance. Repeating a registration
+  keeps the subscription ID and rotates the secret. Secrets are 256-bit `gtsec_…` values stored as SHA-256 and
+  never cached (`Cache-Control: no-store`). Implemented in [devices.go](../internal/devices/devices.go).
+- ✅ `PUT` (extend, or replace the token, endpoint or APNs environment) and `DELETE` with the secret. `DELETE` also
+  accepts the bound instance's signature. A request with signing headers never falls back to the secret.
+- ✅ The app registry from Phase 1 refuses unknown apps and platforms with `unknown_app`.
+- ✅ Validation per platform: APNs hex (normalized to lower case), the FCM alphabet and length, and https Web Push
+  endpoints on public hosts. Endpoints are limited by default to the browser push services
+  (`devices.web_push_hosts`). Requests are parsed strictly, with field errors. "Key format" needs no gateway
+  check: Phase 0 settled that device keys never reach the gateway.
+- ✅ Rate limits per IP (IPv6 per /64), per token, and per subscription for updates, counted only after the secret
+  is checked so a third party cannot burn a subscription's budget.
+- ✅ Dead tokens: `MarkGone`, ready for the Phase 4 providers. It is a compare-and-set on the token and APNs
+  environment the push was sent to, so a late rejection of a replaced token cannot kill the new one; Phase 4 jobs
+  must carry the token hash and environment they read. Registering again or replacing the token
+  reactivates the subscription. `gone` subscriptions are deleted after 7 days, and unrefreshed ones after
+  `gateway.subscription_expiry_days`; both are pruned in batches every 10 minutes. Telling the instance on its
+  next push (`410 subscription_gone`) belongs to the Phase 4 push endpoint.
+- ✅ Tests against PostgreSQL cover:
+  - the lifecycle on every platform;
+  - validation;
+  - instance states;
+  - cross-instance misuse (another instance's signature, another subscription's secret, token collisions,
+    cascade on deregistration);
+  - auth errors, dead tokens, pruning and rate limits.
+
+  The end-to-end test registers and manages devices against the container.
+- ✅ Fixed a Phase 2 documentation bug: huma ignored path parameters declared on embedded structs, so two key
+  endpoints were missing `instance_id` in the generated spec. A test now checks every path parameter, and CI
+  validates the generated spec.
+- 🟨 Protocol clarifications for review:
+  - Several accounts on one instance share a device's subscription; each account keeps its own key pair.
+  - A repeated `DELETE` returns `404`, which callers treat as success, because unknown, foreign and
+    wrong-secret subscriptions must look the same.
 
 ### Phase 4 — Delivery pipeline and mobile providers ⬜
 

@@ -63,6 +63,8 @@ type AddKeyRequest struct {
 	PublicKey string `json:"public_key" pattern:"^[A-Za-z0-9_-]{43}$" doc:"32-byte Ed25519 public key, base64url without padding."`
 }
 
+// instancePath is an input with only the instance ID. huma does not read parameters from
+// embedded structs, so inputs that need more fields repeat it.
 type instancePath struct {
 	InstanceID string `path:"instance_id"`
 }
@@ -218,8 +220,8 @@ func (s *Server) registerInstances(api huma.API) {
 		MaxBodyBytes:  defaultMaxBody,
 		Metadata:      map[string]any{metaAuth: authManage},
 	}, func(ctx context.Context, in *struct {
-		instancePath
-		Body AddKeyRequest
+		InstanceID string `path:"instance_id"`
+		Body       AddKeyRequest
 	}) (*struct{ Body InstanceKey }, error) {
 		k, err := s.Instances.AddKey(ctx, principalFrom(ctx), in.Body.PublicKey)
 		if err != nil {
@@ -239,8 +241,8 @@ func (s *Server) registerInstances(api huma.API) {
 		DefaultStatus: http.StatusNoContent,
 		Metadata:      map[string]any{metaAuth: authManage},
 	}, func(ctx context.Context, in *struct {
-		instancePath
-		KeyID string `path:"key_id"`
+		InstanceID string `path:"instance_id"`
+		KeyID      string `path:"key_id"`
 	}) (*struct{}, error) {
 		if err := s.Instances.RevokeKey(ctx, principalFrom(ctx), in.KeyID); err != nil {
 			return nil, s.serviceError(ctx, err)

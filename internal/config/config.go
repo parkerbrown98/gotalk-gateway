@@ -20,6 +20,7 @@ import (
 	"net/netip"
 	"net/url"
 	"os"
+	"slices"
 	"strings"
 	"time"
 
@@ -32,6 +33,7 @@ import (
 	"github.com/ulule/limiter/v3"
 
 	"github.com/parkerbrown98/gotalk-gateway/internal/apps"
+	"github.com/parkerbrown98/gotalk-gateway/internal/devices"
 )
 
 const (
@@ -48,6 +50,7 @@ type Config struct {
 	Metrics   Metrics    `koanf:"metrics"`
 	Gateway   Gateway    `koanf:"gateway"`
 	Instances Instances  `koanf:"instances"`
+	Devices   Devices    `koanf:"devices"`
 	RateLimit RateLimit  `koanf:"ratelimit"`
 	Apps      []apps.App `koanf:"apps"`
 }
@@ -126,6 +129,13 @@ type Instances struct {
 	AllowedPorts []int `koanf:"allowed_ports"`
 }
 
+// Devices controls device subscriptions.
+type Devices struct {
+	// WebPushHosts restricts Web Push endpoints to these push services and their
+	// subdomains. An empty list allows any public host.
+	WebPushHosts []string `koanf:"web_push_hosts"`
+}
+
 // RateLimit rates use the "<limit>-<period>" format, where period is S, M, H or D.
 type RateLimit struct {
 	Enabled bool `koanf:"enabled"`
@@ -135,6 +145,12 @@ type RateLimit struct {
 	Signed string `koanf:"signed"`
 	// Verification limits on-demand domain verification fetches per signing key.
 	Verification string `koanf:"verification"`
+	// DeviceRegistration limits POST /v1/devices per client IP.
+	DeviceRegistration string `koanf:"device_registration"`
+	// DeviceToken limits registering (or switching to) one platform token.
+	DeviceToken string `koanf:"device_token"`
+	// DeviceUpdate limits refreshes per subscription.
+	DeviceUpdate string `koanf:"device_update"`
 }
 
 // Rules maps rule names to rates; empty when rate limiting is disabled.
@@ -142,7 +158,10 @@ func (r RateLimit) Rules() map[string]string {
 	if !r.Enabled {
 		return map[string]string{}
 	}
-	return map[string]string{"registration": r.Registration, "signed": r.Signed, "verification": r.Verification}
+	return map[string]string{
+		"registration": r.Registration, "signed": r.Signed, "verification": r.Verification,
+		"device_registration": r.DeviceRegistration, "device_token": r.DeviceToken, "device_update": r.DeviceUpdate,
+	}
 }
 
 func defaults() map[string]any {
@@ -176,11 +195,15 @@ func defaults() map[string]any {
 		"ratelimit.registration":           "5-H",
 		"ratelimit.signed":                 "1200-M",
 		"ratelimit.verification":           "12-H",
+		"ratelimit.device_registration":    "60-H",
+		"ratelimit.device_token":           "10-H",
+		"ratelimit.device_update":          "60-H",
+		"devices.web_push_hosts":           slices.Clone(devices.DefaultWebPushHosts),
 	}
 }
 
 // listKeys are split on commas when supplied through the environment or overrides.
-var listKeys = map[string]bool{"server.trusted_proxies": true, "instances.allowed_ports": true}
+var listKeys = map[string]bool{"server.trusted_proxies": true, "instances.allowed_ports": true, "devices.web_push_hosts": true}
 
 // Load builds the configuration. configFile may be empty. overrides maps dotted keys (such
 // as "server.addr") to values and takes precedence over every other layer.
@@ -375,10 +398,20 @@ func (c *Config) Validate() error {
 		{"ratelimit.registration", c.RateLimit.Registration},
 		{"ratelimit.signed", c.RateLimit.Signed},
 		{"ratelimit.verification", c.RateLimit.Verification},
+		{"ratelimit.device_registration", c.RateLimit.DeviceRegistration},
+		{"ratelimit.device_token", c.RateLimit.DeviceToken},
+		{"ratelimit.device_update", c.RateLimit.DeviceUpdate},
 	} {
 		if _, err := limiter.NewRateFromFormatted(f.v); err != nil {
 			add("%s must be <limit>-<period> with period S, M, H or D (e.g. 5-H), got %q", f.key, f.v)
 		}
+	}
+	for i, h := range c.Devices.WebPushHosts {
+		h = strings.ToLower(strings.Trim(strings.TrimSpace(h), "."))
+		if h == "" || strings.ContainsAny(h, "/:@ *") {
+			add("devices.web_push_hosts contains an invalid host name %q (use a name like fcm.googleapis.com)", c.Devices.WebPushHosts[i])
+		}
+		c.Devices.WebPushHosts[i] = h
 	}
 	errs = append(errs, apps.Validate(c.Apps)...)
 

@@ -271,11 +271,23 @@ memory, so a restart can briefly accept a replay inside the skew window; the 5 m
 ## Device registration
 
 A device registration binds one platform token to one `(app, instance origin)` pair. **A client registers one
-subscription per account per instance**, with a fresh keypair for each (see [payload.md](payload.md)). The
+subscription per instance and token**, and uses a fresh key pair for each account on that instance (see
+[payload.md](payload.md)). The
 gateway never receives the device keys: the client gives them to the instance, and the instance encrypts to them.
 
 Device endpoints are called by clients and are unauthenticated at creation (a device cannot prove it is logged
 in to an instance). Later calls use the subscription secret.
+
+**Several accounts on one instance.** iOS and Android give an app install one token, and a browser gives a
+service worker one endpoint, so several accounts that a device holds on the same instance share one
+subscription: registering the same token again returns the same `subscription_id` and rotates the secret (see
+below).
+
+- The client keeps one secret per (instance, token) and registers once.
+- It still generates a key pair per account and gives each account's keys to the instance under that shared
+  `subscription_id`.
+- On receipt, the device tries the keys it holds for the subscription; the `aes128gcm` tag tells it which one
+  fits. The plaintext's `user_id` then routes the notification.
 
 ### Register
 
@@ -329,9 +341,16 @@ Rules:
 
 - `instance_origin` must belong to an instance with status `active` (`instance_not_verified` otherwise,
   `instance_not_found` if the origin is unknown). A device cannot be registered "ahead of time".
-- Validation: iOS tokens are hex, 64 to 200 characters. Android tokens are 100 to 4096 characters of the FCM
-  token alphabet. Web endpoints are `https` URLs of at most 2048 characters whose host is not private; the
-  gateway rejects endpoints it will not send to. Failures return `invalid_token`.
+- `app_id` must be in the discovery `apps` list with the requested platform: `422 unknown_app` otherwise. A
+  blocked instance or blocklisted origin returns `403 instance_blocked`.
+- Validation: iOS tokens are hex, 64 to 200 characters (stored in lower case). Android tokens are 100 to 4096
+  characters of the FCM token alphabet (`A-Z a-z 0-9 _ - . :`). Web endpoints are `https` URLs on port 443, at most
+  2048 characters, whose host is public. The gateway rejects endpoints it will not send to: by default only the
+  browser push services (FCM, Mozilla, Apple, Windows) and their subdomains are accepted, and the operator can
+  change that list. Failures return `422 invalid_token`, and `errors` names the field (`token` or `endpoint`).
+- Malformed requests return `invalid_request`: `400` for a body that is not one JSON object, and `422` with field
+  `errors` for missing, unknown or mismatched fields (for example `endpoint` on iOS). The optional `attestation`
+  object is reserved for Phase 8 and ignored.
 - `apns_environment` is `production` or `sandbox` (iOS only, default `production`).
 - Registering the same `(app, instance origin, platform, token or endpoint)` again returns the **same**
   `subscription_id` with a **new** `subscription_secret`; the old secret stops working. Platform tokens are
@@ -348,22 +367,27 @@ Rules:
 
 | Endpoint | Auth | Purpose |
 |---|---|---|
-| `PUT /v1/devices/{subscription_id}` | Subscription secret | Replace the token or endpoint (same fields as registration, except `app_id` and `instance_origin`, which cannot change). Always extends `expires_at`. An empty body `{}` only extends expiry. |
-| `DELETE /v1/devices/{subscription_id}` | Subscription secret **or** instance signature | Delete the subscription. An instance may only delete subscriptions bound to its own instance. Idempotent: `204` even if already gone. |
+| `PUT /v1/devices/{subscription_id}` | Subscription secret | Replace the token or endpoint (`token` for iOS and Android, `endpoint` for web; iOS may also change `apns_environment`). `app_id` and `instance_origin` cannot change. Always extends `expires_at`. An empty body `{}` only extends expiry. Response: `{"subscription_id", "expires_at"}`. Moving to a token another subscription of the same app and instance already uses returns `409 conflict`; register that token instead. |
+| `DELETE /v1/devices/{subscription_id}` | Subscription secret **or** instance signature | Delete the subscription, including one whose status is `gone` (`204`). An instance may only delete subscriptions bound to its own instance. |
 
 An unknown subscription, a wrong secret, and a subscription bound to another instance all return the same
-`404 subscription_not_found` so that existence cannot be probed.
+`404 subscription_not_found` so that existence cannot be probed. As a consequence, a repeated `DELETE` returns
+`404`; callers SHOULD treat `404` from `DELETE` as success. A missing or non-`Bearer` `Authorization` header
+returns `401 unauthorized`. A request that carries any `Gotalk-*` signing header is always authenticated as an
+instance and never falls back to the secret.
 
 ### Dead tokens
 
 When a provider reports an unregistered or invalid token (APNs `410`/`BadDeviceToken`, FCM `UNREGISTERED`,
-Web Push `404`/`410`), the gateway marks the subscription `gone`. The instance learns about it from:
+Web Push `404`/`410`), the gateway marks the subscription `gone`, unless the client replaced the token (or APNs environment) after the
+push was sent, in which case the stale rejection is ignored. The instance learns about it from:
 
 - the next push to that subscription, which fails with `410 subscription_gone`, and
 - `GET /v1/pushes/{push_id}`, whose `status` is `gone` when the failing push was already accepted.
 
-The instance MUST delete its own record of a `gone` subscription. A client re-registering the same token
-reactivates the subscription. The gateway deletes `gone` subscriptions after 7 days.
+The instance MUST delete its own record of a `gone` subscription. A client re-registering the same token, or
+replacing the token with `PUT`, reactivates the subscription; a refresh that keeps the token does not. The
+gateway deletes `gone` subscriptions after 7 days.
 
 ## Push requests
 
@@ -540,7 +564,8 @@ the actual values are in discovery `limits` and on the instance resource.
 |---|---|
 | `POST /v1/instances` | 5 per hour per IP (IPv6 clients are counted per /64) |
 | `POST /v1/instances/{id}/verify` | 12 per hour per signing key (each one fetches the origin) |
-| `POST /v1/devices` | 60 per hour per IP, 10 per hour per token |
+| `POST /v1/devices` | 60 per hour per IP (IPv6 per /64), 10 per hour per token |
+| `PUT /v1/devices/{id}` | 60 per hour per subscription (counted after the secret is checked), and the per-token limit when the token changes |
 | Signed requests | 1,200 per minute per instance |
 | Pushes (entries) | 50,000 per day per instance (free tier; plans change this in Phase 10) |
 | Pushes per device | 120 per hour per subscription |

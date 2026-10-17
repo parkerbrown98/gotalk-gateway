@@ -13,6 +13,7 @@ internal/blocklist/     Operator blocklist (origin, domain, cidr), cached in mem
 internal/config/        Layered configuration
 internal/database/      PostgreSQL connection and embedded goose migrations
 internal/database/migrations/  Schema (one file per version)
+internal/devices/       Device subscriptions: token validation, register, refresh, delete, dead tokens, pruning
 internal/e2e/           End-to-end test against a running gateway (build tag e2e)
 internal/ids/           Prefixed random IDs (inst_, key_, sub_, push_, req_)
 internal/instances/     Registration, verification, rotation, recovery, scheduled re-verification
@@ -37,7 +38,7 @@ scripts/smoke.sh        Smoke test for a running gateway
 | Run from source | `docker compose up -d postgres redis`, then `make run` |
 | All tests (needs Docker) | `make test` |
 | Tests without containers | `make test-unit` (runs `go test -short`; PostgreSQL and Redis tests are skipped) |
-| End-to-end test | `make e2e`: starts the stack in development mode (`docker-compose.e2e.yml`) and runs `internal/e2e`, which plays an instance: it serves its own well-known document on port 18080 and registers, verifies, signs, rotates and recovers |
+| End-to-end test | `make e2e`: starts the stack in development mode (`docker-compose.e2e.yml`) and runs `internal/e2e`, which plays an instance: it serves its own well-known document on port 18080 and registers, verifies, signs, rotates and recovers, then registers and manages devices |
 | Lint and format | `make lint`, `make fmt` |
 | Regenerate queries | `make sqlc` after you change `internal/store/queries/` or a migration |
 | Print the implemented API spec | `make openapi` |
@@ -72,6 +73,6 @@ When you implement an endpoint, update the contract and [protocol.md](protocol.m
 - `go vet` and golangci-lint.
 - `sqlc diff`.
 - Tests with `-race`, with PostgreSQL in containers.
-- Validation of the OpenAPI contract and the breaking-change check.
+- Validation of the OpenAPI contract and of the spec generated from the code, and the breaking-change check.
 - A `docker compose up` smoke test plus the end-to-end test, including graceful shutdown.
 - A multi-arch image build, pushed to `ghcr.io/parkerbrown98/gotalk-gateway` from `main` and from tags.

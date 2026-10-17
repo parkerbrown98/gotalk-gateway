@@ -57,6 +57,15 @@ instances:
   # Origin ports allowed besides the scheme default (443), e.g. [8443].
   allowed_ports: []
 
+devices:
+  # Web Push endpoints must belong to one of these push services (or a subdomain). Set to
+  # [] to allow any public host.
+  web_push_hosts:
+    - fcm.googleapis.com # Chrome, Samsung Internet, Opera, Brave
+    - updates.push.services.mozilla.com # Firefox
+    - web.push.apple.com # Safari
+    - notify.windows.com # Edge
+
 # Rates are "<limit>-<period>" with period S, M, H or D. Counters are shared through Redis
 # when redis.url is set, and kept per process otherwise.
 ratelimit:
@@ -67,6 +76,12 @@ ratelimit:
   signed: 1200-M
   # On-demand domain verification fetches per signing key.
   verification: 12-H
+  # POST /v1/devices per client IP (per /64 for IPv6).
+  device_registration: 60-H
+  # Registrations of (or switches to) one platform token.
+  device_token: 10-H
+  # Refreshes per subscription.
+  device_update: 60-H
 
 # Apps this gateway delivers for. Devices may only register for listed apps. Apps can only
 # be declared in this file. Provider credentials (APNs, FCM, VAPID private key) are added in

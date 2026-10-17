@@ -93,6 +93,16 @@ Verification fetches always refuse redirects and proxies. They time out after 5 
 `application/json`, and run at most 16 at a time. The address is checked on every connection, after DNS
 resolution.
 
+### `devices`
+
+Device subscriptions. How long a subscription lives without a refresh is `gateway.subscription_expiry_days`.
+Subscriptions that a provider reports as dead are kept for 7 days and then deleted. Both are pruned every
+10 minutes.
+
+| Key | Default | Description |
+|---|---|---|
+| `web_push_hosts` | FCM, Mozilla, Apple and Windows push services | Web Push endpoints must be on one of these hosts or a subdomain: `fcm.googleapis.com`, `updates.push.services.mozilla.com`, `web.push.apple.com`, `notify.windows.com`. Set `[]` to accept any public host. Endpoints must use https on port 443 either way. |
+
 ### `ratelimit`
 
 Rates use `<limit>-<period>`, where the period is `S`, `M`, `H` or `D`. When `redis.url` is set, counters are shared
@@ -104,6 +114,9 @@ through Redis; otherwise each process keeps its own. Limited responses carry `X-
 | `enabled` | `true` | Turn every limit off with `false` (for example, behind your own rate limiter). |
 | `registration` | `5-H` | `POST /v1/instances` per client IP (per /64 for IPv6). |
 | `signed` | `1200-M` | Signed requests per instance. |
+| `device_registration` | `60-H` | `POST /v1/devices` per client IP (per /64 for IPv6). |
+| `device_token` | `10-H` | Registrations of one platform token or endpoint, and `PUT` switches to it. |
+| `device_update` | `60-H` | `PUT /v1/devices/{id}` per subscription, counted only after the secret is checked. |
 | `verification` | `12-H` | `POST /v1/instances/{id}/verify` per signing key. Each one fetches the origin. The limit is per key so that someone who registers a key for another origin cannot use up that origin owner's budget. |
 
 ## Operator commands

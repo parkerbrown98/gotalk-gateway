@@ -27,6 +27,7 @@ import (
 	"github.com/parkerbrown98/gotalk-gateway/internal/blocklist"
 	"github.com/parkerbrown98/gotalk-gateway/internal/config"
 	"github.com/parkerbrown98/gotalk-gateway/internal/database"
+	"github.com/parkerbrown98/gotalk-gateway/internal/devices"
 	"github.com/parkerbrown98/gotalk-gateway/internal/instances"
 	"github.com/parkerbrown98/gotalk-gateway/internal/nonce"
 	"github.com/parkerbrown98/gotalk-gateway/internal/ratelimit"
@@ -321,6 +322,12 @@ func serve(ctx context.Context, cfg *config.Config, log *slog.Logger) error {
 		UserAgent:            "gotalk-gateway/" + version,
 	})
 	svc := instances.New(pool, fetcher, bl, instances.Options{AllowHTTP: cfg.Instances.AllowHTTP, Logger: log})
+	devicesSvc := devices.New(pool, registry, bl, devices.Options{
+		ExpiryDays:       cfg.Gateway.SubscriptionExpiryDays,
+		WebPushHosts:     cfg.Devices.WebPushHosts,
+		AllowHTTPOrigins: cfg.Instances.AllowHTTP,
+		Logger:           log,
+	})
 	limiter, err := ratelimit.New(rdb, cfg.RateLimit.Rules())
 	if err != nil {
 		return err
@@ -330,6 +337,7 @@ func serve(ctx context.Context, cfg *config.Config, log *slog.Logger) error {
 	var background sync.WaitGroup
 	background.Go(func() { bl.Run(bgCtx) })
 	background.Go(func() { svc.RunMaintenance(bgCtx) })
+	background.Go(func() { devicesSvc.RunMaintenance(bgCtx) })
 	defer func() {
 		stopBackground()
 		background.Wait()
@@ -338,7 +346,7 @@ func serve(ctx context.Context, cfg *config.Config, log *slog.Logger) error {
 	metrics := api.NewMetrics(version)
 	handler := api.New(api.Deps{
 		Config: cfg, Logger: log, Version: version, Apps: registry, Checks: checks, Metrics: metrics,
-		Instances: svc, Nonces: nonce.New(rdb), Limiter: limiter, Blocklist: bl,
+		Instances: svc, Devices: devicesSvc, Nonces: nonce.New(rdb), Limiter: limiter, Blocklist: bl,
 	})
 	servers := []*http.Server{newHTTPServer(cfg.Server.Addr, handler, log)}
 	if cfg.Metrics.Enabled && cfg.Metrics.Addr != "" {

@@ -34,8 +34,10 @@ For each subscription the client generates:
 - a random 16-byte `auth` secret.
 
 The client sends the instance the **uncompressed public key** (65 bytes, base64url, called `p256dh`) and `auth`
-(16 bytes, base64url). The gateway never receives either. One key pair per subscription (and so per account per
-instance) stops two instances from correlating a device by its public key.
+(16 bytes, base64url). The gateway never receives either. A fresh key pair for every account on every instance stops
+two instances from correlating a device by its public key. Accounts on the same instance share the device's
+subscription, and the device tries each of its keys for that subscription (see
+[protocol.md](protocol.md#device-registration)).
 
 **Web is the exception.** A browser creates the key pair and `auth` itself as part of the `PushSubscription`.
 `pushManager.subscribe()` exposes `p256dh` and `auth` through `getKey()`, and the client sends them to the

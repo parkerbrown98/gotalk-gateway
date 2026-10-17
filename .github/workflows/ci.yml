@@ -54,10 +54,15 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.13"
-      - name: Validate docs/openapi.yaml
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - name: Validate docs/openapi.yaml and the spec generated from the code
         run: |
           pip install --quiet openapi-spec-validator
           openapi-spec-validator docs/openapi.yaml
+          go run ./cmd/gotalk-gateway openapi > "$RUNNER_TEMP/generated.yaml"
+          openapi-spec-validator "$RUNNER_TEMP/generated.yaml"
       # docs/oasdiff-levels.txt downgrades new response enum values: the protocol makes them
       # additive within a major version, and callers must tolerate them.
       - name: Check for breaking changes against the base branch
