@@ -1,0 +1,984 @@
+openapi: 3.1.0
+info:
+  title: Gotalk Push Gateway API
+  version: 1.0.0-draft.1
+  summary: Push notification gateway for Gotalk instances and clients.
+  description: |
+    Skeleton contract for protocol v1. Behavior, signing, and error semantics are specified in
+    `docs/protocol.md`; payload formats in `docs/payload.md`.
+  license:
+    name: AGPL-3.0-only
+    identifier: AGPL-3.0-only
+servers:
+  - url: https://push.example
+    description: Placeholder. The official gateway URL is decided in Phase 0 logistics.
+tags:
+  - name: Discovery
+  - name: Instances
+    description: Instance registration and key management. Signed by the instance unless noted.
+  - name: Devices
+    description: Device subscriptions, called by clients and by the bound instance.
+  - name: Push
+    description: Push delivery, signed by the instance.
+security: []
+paths:
+  /.well-known/gotalk-gateway:
+    get:
+      tags: [Discovery]
+      operationId: getWellKnownGateway
+      summary: Gateway discovery (alias of GET /v1/gateway)
+      responses:
+        "200":
+          $ref: "#/components/responses/Gateway"
+  /v1/gateway:
+    get:
+      tags: [Discovery]
+      operationId: getGateway
+      summary: Gateway discovery
+      responses:
+        "200":
+          $ref: "#/components/responses/Gateway"
+  /v1/instances:
+    post:
+      tags: [Instances]
+      operationId: registerInstance
+      summary: Register an instance origin and public key
+      description: Unauthenticated, rate limited per IP. Re-registering a verified origin starts key recovery.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/RegisterInstanceRequest"
+      responses:
+        "201":
+          description: Registered, pending domain verification.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RegisterInstanceResponse"
+        "400":
+          $ref: "#/components/responses/Problem"
+        "413":
+          $ref: "#/components/responses/Problem"
+        "422":
+          $ref: "#/components/responses/Problem"
+        "429":
+          $ref: "#/components/responses/RateLimited"
+  /v1/instances/{instance_id}:
+    parameters:
+      - $ref: "#/components/parameters/InstanceId"
+    get:
+      tags: [Instances]
+      operationId: getInstance
+      summary: Instance status, keys and usage
+      description: Allowed while the instance is pending or suspended.
+      security:
+        - instanceSignature: []
+      responses:
+        "200":
+          description: The instance.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Instance"
+        "401":
+          $ref: "#/components/responses/Problem"
+        "404":
+          $ref: "#/components/responses/Problem"
+        "429":
+          $ref: "#/components/responses/RateLimited"
+    delete:
+      tags: [Instances]
+      operationId: deleteInstance
+      summary: Deregister the instance and delete all its subscriptions
+      security:
+        - instanceSignature: []
+      responses:
+        "204":
+          description: Deleted.
+        "401":
+          $ref: "#/components/responses/Problem"
+        "404":
+          $ref: "#/components/responses/Problem"
+        "429":
+          $ref: "#/components/responses/RateLimited"
+  /v1/instances/{instance_id}/verify:
+    parameters:
+      - $ref: "#/components/parameters/InstanceId"
+    post:
+      tags: [Instances]
+      operationId: verifyInstance
+      summary: Run domain verification now
+      security:
+        - instanceSignature: []
+      responses:
+        "200":
+          description: Verification succeeded; the instance is active.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Instance"
+        "401":
+          $ref: "#/components/responses/Problem"
+        "404":
+          $ref: "#/components/responses/Problem"
+        "422":
+          $ref: "#/components/responses/Problem"
+        "429":
+          $ref: "#/components/responses/RateLimited"
+  /v1/instances/{instance_id}/keys:
+    parameters:
+      - $ref: "#/components/parameters/InstanceId"
+    post:
+      tags: [Instances]
+      operationId: addInstanceKey
+      summary: Add a key for rotation
+      description: The key becomes active once the origin's well-known document advertises it.
+      security:
+        - instanceSignature: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/AddKeyRequest"
+      responses:
+        "201":
+          description: Key added as pending.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/InstanceKey"
+        "401":
+          $ref: "#/components/responses/Problem"
+        "404":
+          $ref: "#/components/responses/Problem"
+        "409":
+          $ref: "#/components/responses/Problem"
+        "422":
+          $ref: "#/components/responses/Problem"
+        "429":
+          $ref: "#/components/responses/RateLimited"
+  /v1/instances/{instance_id}/keys/{key_id}:
+    parameters:
+      - $ref: "#/components/parameters/InstanceId"
+      - name: key_id
+        in: path
+        required: true
+        schema:
+          $ref: "#/components/schemas/KeyId"
+    delete:
+      tags: [Instances]
+      operationId: revokeInstanceKey
+      summary: Revoke a key
+      description: The last active key cannot be revoked; deregister the instance instead.
+      security:
+        - instanceSignature: []
+      responses:
+        "204":
+          description: Revoked.
+        "401":
+          $ref: "#/components/responses/Problem"
+        "404":
+          $ref: "#/components/responses/Problem"
+        "409":
+          $ref: "#/components/responses/Problem"
+        "429":
+          $ref: "#/components/responses/RateLimited"
+  /v1/devices:
+    post:
+      tags: [Devices]
+      operationId: registerDevice
+      summary: Register a platform token for one instance and account
+      description: |
+        Unauthenticated, rate limited per IP and per token. Registering the same token again returns the
+        same subscription ID with a new secret; the old secret stops working.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/RegisterDeviceRequest"
+      responses:
+        "201":
+          description: Registered.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RegisterDeviceResponse"
+        "400":
+          $ref: "#/components/responses/Problem"
+        "403":
+          $ref: "#/components/responses/Problem"
+        "404":
+          $ref: "#/components/responses/Problem"
+        "413":
+          $ref: "#/components/responses/Problem"
+        "422":
+          $ref: "#/components/responses/Problem"
+        "429":
+          $ref: "#/components/responses/RateLimited"
+  /v1/devices/{subscription_id}:
+    parameters:
+      - $ref: "#/components/parameters/SubscriptionId"
+    put:
+      tags: [Devices]
+      operationId: refreshDevice
+      summary: Refresh a subscription or replace its token
+      description: Always extends the expiry. An empty object only extends it.
+      security:
+        - subscriptionSecret: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/RefreshDeviceRequest"
+      responses:
+        "200":
+          description: Refreshed.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RefreshDeviceResponse"
+        "400":
+          $ref: "#/components/responses/Problem"
+        "404":
+          $ref: "#/components/responses/Problem"
+        "422":
+          $ref: "#/components/responses/Problem"
+        "429":
+          $ref: "#/components/responses/RateLimited"
+    delete:
+      tags: [Devices]
+      operationId: deleteDevice
+      summary: Delete a subscription
+      description: |
+        Authorized by the subscription secret or by a signature from the instance the subscription is bound
+        to. Idempotent.
+      security:
+        - subscriptionSecret: []
+        - instanceSignature: []
+      responses:
+        "204":
+          description: Deleted, or already gone.
+        "401":
+          $ref: "#/components/responses/Problem"
+        "404":
+          $ref: "#/components/responses/Problem"
+        "429":
+          $ref: "#/components/responses/RateLimited"
+  /v1/push:
+    post:
+      tags: [Push]
+      operationId: sendPush
+      summary: Queue one push
+      security:
+        - instanceSignature: []
+      parameters:
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/PushRequest"
+      responses:
+        "202":
+          description: Accepted and queued.
+          headers:
+            Idempotency-Replayed:
+              description: "`true` when the response replays an earlier request with the same key."
+              schema:
+                type: string
+                enum: ["true"]
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PushAccepted"
+        "400":
+          $ref: "#/components/responses/Problem"
+        "401":
+          $ref: "#/components/responses/Problem"
+        "403":
+          $ref: "#/components/responses/Problem"
+        "404":
+          $ref: "#/components/responses/Problem"
+        "410":
+          $ref: "#/components/responses/Problem"
+        "413":
+          $ref: "#/components/responses/Problem"
+        "422":
+          $ref: "#/components/responses/Problem"
+        "429":
+          $ref: "#/components/responses/RateLimited"
+        "503":
+          $ref: "#/components/responses/Problem"
+  /v1/push/batch:
+    post:
+      tags: [Push]
+      operationId: sendPushBatch
+      summary: Queue up to 100 pushes
+      description: |
+        Always `202` when the batch itself is valid; per-entry failures are reported in `results`.
+      security:
+        - instanceSignature: []
+      parameters:
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/PushBatchRequest"
+      responses:
+        "202":
+          description: Batch processed.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PushBatchResponse"
+        "400":
+          $ref: "#/components/responses/Problem"
+        "401":
+          $ref: "#/components/responses/Problem"
+        "403":
+          $ref: "#/components/responses/Problem"
+        "413":
+          $ref: "#/components/responses/Problem"
+        "422":
+          $ref: "#/components/responses/Problem"
+        "429":
+          $ref: "#/components/responses/RateLimited"
+        "503":
+          $ref: "#/components/responses/Problem"
+  /v1/pushes/{push_id}:
+    parameters:
+      - name: push_id
+        in: path
+        required: true
+        schema:
+          $ref: "#/components/schemas/PushId"
+    get:
+      tags: [Push]
+      operationId: getPush
+      summary: Delivery status of a push
+      description: Entries are kept for 72 hours and contain no content.
+      security:
+        - instanceSignature: []
+      responses:
+        "200":
+          description: The delivery log entry.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PushStatus"
+        "401":
+          $ref: "#/components/responses/Problem"
+        "404":
+          $ref: "#/components/responses/Problem"
+        "429":
+          $ref: "#/components/responses/RateLimited"
+components:
+  securitySchemes:
+    instanceSignature:
+      type: apiKey
+      in: header
+      name: Gotalk-Signature
+      description: |
+        Ed25519 request signature. Also send `Gotalk-Key-Id`, `Gotalk-Timestamp`, `Gotalk-Nonce` and, with a
+        body, `Content-Digest`. The signing string is defined in `docs/protocol.md#request-signing`.
+    subscriptionSecret:
+      type: http
+      scheme: bearer
+      description: The `subscription_secret` returned when the device was registered.
+  parameters:
+    InstanceId:
+      name: instance_id
+      in: path
+      required: true
+      schema:
+        $ref: "#/components/schemas/InstanceId"
+    SubscriptionId:
+      name: subscription_id
+      in: path
+      required: true
+      schema:
+        $ref: "#/components/schemas/SubscriptionId"
+    IdempotencyKey:
+      name: Idempotency-Key
+      in: header
+      required: false
+      description: Repeats within 24 hours return the original response.
+      schema:
+        type: string
+        minLength: 1
+        maxLength: 64
+  headers:
+    RetryAfter:
+      description: Seconds to wait before retrying.
+      schema:
+        type: integer
+        minimum: 0
+    RateLimitLimit:
+      description: Requests allowed in the current window.
+      schema:
+        type: integer
+    RateLimitRemaining:
+      description: Requests left in the current window.
+      schema:
+        type: integer
+    RateLimitReset:
+      description: Unix seconds when the window resets.
+      schema:
+        type: integer
+  responses:
+    Gateway:
+      description: Gateway discovery document.
+      headers:
+        Cache-Control:
+          schema:
+            type: string
+            example: public, max-age=300
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Gateway"
+    Problem:
+      description: Error. See the error code table in `docs/protocol.md`.
+      content:
+        application/problem+json:
+          schema:
+            $ref: "#/components/schemas/Problem"
+    RateLimited:
+      description: Rate limit or quota reached.
+      headers:
+        Retry-After:
+          $ref: "#/components/headers/RetryAfter"
+        X-RateLimit-Limit:
+          $ref: "#/components/headers/RateLimitLimit"
+        X-RateLimit-Remaining:
+          $ref: "#/components/headers/RateLimitRemaining"
+        X-RateLimit-Reset:
+          $ref: "#/components/headers/RateLimitReset"
+      content:
+        application/problem+json:
+          schema:
+            $ref: "#/components/schemas/Problem"
+  schemas:
+    InstanceId:
+      type: string
+      pattern: "^inst_[A-Za-z0-9_-]{8,64}$"
+      examples: [inst_7Hq2wXr9TbLm]
+    KeyId:
+      type: string
+      pattern: "^key_[A-Za-z0-9_-]{8,64}$"
+      examples: [key_9fKdPq3Zx7Aa]
+    SubscriptionId:
+      type: string
+      pattern: "^sub_[A-Za-z0-9_-]{8,64}$"
+      examples: [sub_3kPd8Lw0QnVc]
+    PushId:
+      type: string
+      pattern: "^push_[A-Za-z0-9_-]{8,64}$"
+      examples: [push_5QmZc1RhNe8y]
+    Base64Url:
+      type: string
+      pattern: "^[A-Za-z0-9_-]+$"
+      description: base64url without padding.
+    Ed25519PublicKey:
+      type: string
+      pattern: "^[A-Za-z0-9_-]{43}$"
+      description: 32-byte Ed25519 public key, base64url without padding.
+      examples: [A6EHv_POEL4dcN0Y50vAmWfk1jCbpQ1fHdyGZBJVMbg]
+    Origin:
+      type: string
+      format: uri
+      maxLength: 253
+      pattern: "^https://[a-z0-9.-]+(:[0-9]{1,5})?$"
+      description: Normalized instance origin. No path, query, fragment or trailing slash.
+      examples: ["https://forum.example"]
+    Platform:
+      type: string
+      enum: [ios, android, web]
+    Urgency:
+      type: string
+      enum: [low, normal, high]
+      default: normal
+    Problem:
+      type: object
+      description: RFC 9457 problem details with a stable `code`.
+      required: [type, title, status, code]
+      properties:
+        type:
+          type: string
+          format: uri-reference
+        title:
+          type: string
+        status:
+          type: integer
+        code:
+          type: string
+          enum:
+            - invalid_request
+            - invalid_signature
+            - unknown_key
+            - stale_timestamp
+            - replayed_nonce
+            - unauthorized
+            - instance_not_verified
+            - instance_blocked
+            - unknown_app
+            - invalid_token
+            - verification_failed
+            - instance_not_found
+            - subscription_not_found
+            - push_not_found
+            - conflict
+            - subscription_gone
+            - payload_too_large
+            - unsupported_media_type
+            - rate_limited
+            - quota_exceeded
+            - provider_rejected
+            - provider_unavailable
+            - internal_error
+          description: Callers must tolerate values not listed here.
+        detail:
+          type: string
+        request_id:
+          type: string
+        errors:
+          type: array
+          description: Field-level problems for `invalid_request`.
+          items:
+            type: object
+            required: [field, message]
+            properties:
+              field:
+                type: string
+              message:
+                type: string
+    ItemError:
+      type: object
+      required: [code, message]
+      properties:
+        code:
+          type: string
+        message:
+          type: string
+    Gateway:
+      type: object
+      required: [software, name, version, api_versions, api_base_url, platforms, apps, limits]
+      properties:
+        software:
+          type: string
+          const: gotalk-gateway
+        name:
+          type: string
+        version:
+          type: string
+        api_versions:
+          type: array
+          items:
+            type: string
+            examples: [v1]
+        api_base_url:
+          type: string
+          format: uri
+        platforms:
+          type: array
+          items:
+            $ref: "#/components/schemas/Platform"
+        apps:
+          type: array
+          items:
+            $ref: "#/components/schemas/App"
+        limits:
+          $ref: "#/components/schemas/GatewayLimits"
+        terms_url:
+          type: string
+          format: uri
+        privacy_url:
+          type: string
+          format: uri
+    App:
+      type: object
+      required: [id, name, platforms]
+      properties:
+        id:
+          type: string
+          pattern: "^[a-z0-9][a-z0-9-]{0,31}$"
+        name:
+          type: string
+        platforms:
+          type: object
+          properties:
+            ios:
+              type: object
+              required: [bundle_id]
+              properties:
+                bundle_id:
+                  type: string
+            android:
+              type: object
+              required: [package_name]
+              properties:
+                package_name:
+                  type: string
+            web:
+              type: object
+              required: [vapid_public_key]
+              properties:
+                vapid_public_key:
+                  $ref: "#/components/schemas/Base64Url"
+        attestation_required:
+          type: boolean
+          default: false
+          description: Reserved for Phase 8.
+    GatewayLimits:
+      type: object
+      required: [max_plaintext_bytes, max_encrypted_body_bytes, max_batch_size, max_ttl_seconds]
+      properties:
+        max_plaintext_bytes:
+          type: integer
+          examples: [2048]
+        max_encrypted_body_bytes:
+          type: integer
+          examples: [2200]
+        max_batch_size:
+          type: integer
+          examples: [100]
+        max_ttl_seconds:
+          type: integer
+          examples: [2419200]
+        subscription_expiry_days:
+          type: integer
+          examples: [60]
+    RegisterInstanceRequest:
+      type: object
+      additionalProperties: false
+      required: [origin, public_key, contact_email]
+      properties:
+        origin:
+          $ref: "#/components/schemas/Origin"
+        public_key:
+          $ref: "#/components/schemas/Ed25519PublicKey"
+        contact_email:
+          type: string
+          format: email
+          maxLength: 254
+        software:
+          type: string
+          maxLength: 64
+        software_version:
+          type: string
+          maxLength: 64
+    RegisterInstanceResponse:
+      type: object
+      required: [instance_id, key_id, status, verification]
+      properties:
+        instance_id:
+          $ref: "#/components/schemas/InstanceId"
+        key_id:
+          $ref: "#/components/schemas/KeyId"
+        status:
+          $ref: "#/components/schemas/InstanceStatus"
+        verification:
+          type: object
+          required: [well_known_url, expires_at]
+          properties:
+            well_known_url:
+              type: string
+              format: uri
+            expires_at:
+              type: string
+              format: date-time
+    InstanceStatus:
+      type: string
+      enum: [pending, active, suspended, blocked]
+    InstanceKey:
+      type: object
+      required: [key_id, public_key, status, created_at]
+      properties:
+        key_id:
+          $ref: "#/components/schemas/KeyId"
+        public_key:
+          $ref: "#/components/schemas/Ed25519PublicKey"
+        status:
+          type: string
+          enum: [pending, active, revoked]
+        created_at:
+          type: string
+          format: date-time
+    AddKeyRequest:
+      type: object
+      additionalProperties: false
+      required: [public_key]
+      properties:
+        public_key:
+          $ref: "#/components/schemas/Ed25519PublicKey"
+    Instance:
+      type: object
+      required: [instance_id, origin, status, keys, created_at]
+      properties:
+        instance_id:
+          $ref: "#/components/schemas/InstanceId"
+        origin:
+          $ref: "#/components/schemas/Origin"
+        status:
+          $ref: "#/components/schemas/InstanceStatus"
+        status_reason:
+          type: [string, "null"]
+          description: Operator-visible reason when blocked or suspended.
+        keys:
+          type: array
+          items:
+            $ref: "#/components/schemas/InstanceKey"
+        contact_email:
+          type: string
+          format: email
+        verified_at:
+          type: [string, "null"]
+          format: date-time
+        created_at:
+          type: string
+          format: date-time
+        usage:
+          type: object
+          description: Usage for the current day.
+          properties:
+            pushes_accepted:
+              type: integer
+            pushes_failed:
+              type: integer
+            active_subscriptions:
+              type: integer
+            daily_quota:
+              type: integer
+    RegisterDeviceRequest:
+      description: One of the three platform shapes.
+      oneOf:
+        - $ref: "#/components/schemas/RegisterIosDevice"
+        - $ref: "#/components/schemas/RegisterAndroidDevice"
+        - $ref: "#/components/schemas/RegisterWebDevice"
+      discriminator:
+        propertyName: platform
+        mapping:
+          ios: "#/components/schemas/RegisterIosDevice"
+          android: "#/components/schemas/RegisterAndroidDevice"
+          web: "#/components/schemas/RegisterWebDevice"
+    DeviceCommon:
+      type: object
+      required: [app_id, instance_origin, platform]
+      properties:
+        app_id:
+          type: string
+          pattern: "^[a-z0-9][a-z0-9-]{0,31}$"
+        instance_origin:
+          $ref: "#/components/schemas/Origin"
+        attestation:
+          type: object
+          description: Reserved for Phase 8 (App Attest, Play Integrity). Ignored in v1 drafts.
+          additionalProperties: true
+    RegisterIosDevice:
+      allOf:
+        - $ref: "#/components/schemas/DeviceCommon"
+        - type: object
+          additionalProperties: false
+          required: [platform, token]
+          properties:
+            app_id: {}
+            instance_origin: {}
+            attestation: {}
+            platform:
+              const: ios
+            token:
+              type: string
+              pattern: "^[0-9a-fA-F]{64,200}$"
+            apns_environment:
+              type: string
+              enum: [production, sandbox]
+              default: production
+    RegisterAndroidDevice:
+      allOf:
+        - $ref: "#/components/schemas/DeviceCommon"
+        - type: object
+          additionalProperties: false
+          required: [platform, token]
+          properties:
+            app_id: {}
+            instance_origin: {}
+            attestation: {}
+            platform:
+              const: android
+            token:
+              type: string
+              minLength: 100
+              maxLength: 4096
+    RegisterWebDevice:
+      allOf:
+        - $ref: "#/components/schemas/DeviceCommon"
+        - type: object
+          additionalProperties: false
+          required: [platform, endpoint]
+          properties:
+            app_id: {}
+            instance_origin: {}
+            attestation: {}
+            platform:
+              const: web
+            endpoint:
+              type: string
+              format: uri
+              maxLength: 2048
+    RegisterDeviceResponse:
+      type: object
+      required: [subscription_id, subscription_secret, expires_at]
+      properties:
+        subscription_id:
+          $ref: "#/components/schemas/SubscriptionId"
+        subscription_secret:
+          type: string
+          description: Shown once. Store it in secure storage. Never send it to the instance.
+        expires_at:
+          type: string
+          format: date-time
+    RefreshDeviceRequest:
+      type: object
+      additionalProperties: false
+      description: |
+        Empty object extends expiry only. Provide the field matching the subscription's platform to replace
+        the token.
+      properties:
+        token:
+          type: string
+          minLength: 64
+          maxLength: 4096
+        endpoint:
+          type: string
+          format: uri
+          maxLength: 2048
+        apns_environment:
+          type: string
+          enum: [production, sandbox]
+    RefreshDeviceResponse:
+      type: object
+      required: [subscription_id, expires_at]
+      properties:
+        subscription_id:
+          $ref: "#/components/schemas/SubscriptionId"
+        expires_at:
+          type: string
+          format: date-time
+    PushRequest:
+      type: object
+      additionalProperties: false
+      required: [subscription_id, mode, notification_id]
+      properties:
+        subscription_id:
+          $ref: "#/components/schemas/SubscriptionId"
+        mode:
+          type: string
+          enum: [encrypted, id_only]
+        notification_id:
+          type: string
+          pattern: "^[A-Za-z0-9._:-]{1,64}$"
+        payload:
+          type: string
+          pattern: "^[A-Za-z0-9_-]+$"
+          minLength: 138
+          maxLength: 2934
+          description: |
+            RFC 8291 `aes128gcm` body, base64url. 103 to 2,200 bytes decoded. Required when `mode` is
+            `encrypted`, forbidden when `id_only`. Never inspected by the gateway.
+        urgency:
+          $ref: "#/components/schemas/Urgency"
+        ttl:
+          type: integer
+          minimum: 0
+          maximum: 2419200
+          default: 86400
+        collapse_key:
+          type: string
+          pattern: "^[A-Za-z0-9_-]{1,32}$"
+      if:
+        properties:
+          mode:
+            const: encrypted
+      then:
+        required: [payload]
+      else:
+        not:
+          required: [payload]
+    PushAccepted:
+      type: object
+      required: [push_id, subscription_id, status]
+      properties:
+        push_id:
+          $ref: "#/components/schemas/PushId"
+        subscription_id:
+          $ref: "#/components/schemas/SubscriptionId"
+        status:
+          type: string
+          const: queued
+    PushBatchRequest:
+      type: object
+      additionalProperties: false
+      required: [pushes]
+      properties:
+        pushes:
+          type: array
+          minItems: 1
+          maxItems: 100
+          items:
+            $ref: "#/components/schemas/PushRequest"
+    PushBatchResponse:
+      type: object
+      required: [results]
+      properties:
+        results:
+          type: array
+          items:
+            type: object
+            required: [index, status, subscription_id]
+            properties:
+              index:
+                type: integer
+                minimum: 0
+              status:
+                type: string
+                enum: [queued, rejected]
+              subscription_id:
+                type: string
+              push_id:
+                $ref: "#/components/schemas/PushId"
+              error:
+                $ref: "#/components/schemas/ItemError"
+    PushStatus:
+      type: object
+      required: [push_id, subscription_id, notification_id, status, attempts, created_at, updated_at]
+      properties:
+        push_id:
+          $ref: "#/components/schemas/PushId"
+        subscription_id:
+          $ref: "#/components/schemas/SubscriptionId"
+        notification_id:
+          type: string
+        status:
+          type: string
+          enum: [queued, sent, failed, expired, gone]
+        attempts:
+          type: integer
+          minimum: 0
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+        error:
+          oneOf:
+            - $ref: "#/components/schemas/ItemError"
+            - type: "null"
