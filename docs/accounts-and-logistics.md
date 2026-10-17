@@ -41,5 +41,6 @@ Decided in this repository:
   does not transfer copyright. The consequence is that relicensing later (for example to sell a non-AGPL commercial
   license) would need agreement from every contributor. If that option matters, switch to a CLA **before** accepting
   the first external contribution.
-- `gotalk-server` currently has no `LICENSE` file; the plan says the gateway matches the server's strategy, so the
-  server needs the same decision recorded.
+- `gotalk-server` is licensed **AGPL-3.0** (see its `LICENSE`) and `gotalk-client` is licensed **MIT**. The
+  client is MIT because it ships through app stores, where copyleft licensing is awkward for outside
+  contributions; it only talks to the server over the public API.
