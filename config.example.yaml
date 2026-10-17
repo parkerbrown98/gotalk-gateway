@@ -1,0 +1,63 @@
+# Gotalk push gateway configuration. Every key is optional; built-in defaults are shown.
+# Precedence: defaults < this file < GOTALK_GATEWAY_* environment variables < command-line flags.
+# Environment names: GOTALK_GATEWAY_<SECTION>_<KEY>, e.g. GOTALK_GATEWAY_DATABASE_URL.
+# See docs/configuration.md for details.
+
+server:
+  addr: ":8090"
+  # Externally reachable base URL, used for api_base_url in discovery. Derived from each
+  # request when empty. Set it in production.
+  public_url: ""
+  # Honor X-Forwarded-* headers from trusted_proxies (enable behind a reverse proxy).
+  trust_proxy: false
+  trusted_proxies:
+    - 127.0.0.0/8
+    - "::1/128"
+    - 10.0.0.0/8
+    - 172.16.0.0/12
+    - 192.168.0.0/16
+    - fc00::/7
+  # After SIGTERM, keep serving for this long while /readyz reports "draining" so load
+  # balancers stop routing here first (e.g. 5s on Kubernetes).
+  drain_delay: 0s
+  shutdown_timeout: 20s
+
+database:
+  url: postgres://gotalk:gotalk@localhost:5432/gotalk_gateway?sslmode=disable
+  max_conns: 20
+  auto_migrate: true
+  connect_timeout: 30s
+
+redis:
+  # Optional. Leave empty for single-node mode; required for more than one replica.
+  url: ""
+
+log:
+  level: info # debug, info, warn, error
+  format: json # json or text
+
+metrics:
+  enabled: true
+  # Serve /metrics on its own listener (e.g. ":9090") to keep it off the public port.
+  addr: ""
+
+gateway:
+  name: Gotalk Push Gateway
+  terms_url: ""
+  privacy_url: ""
+  subscription_expiry_days: 60
+
+# Apps this gateway delivers for. Devices may only register for listed apps. Apps can only
+# be declared in this file. Provider credentials (APNs, FCM, VAPID private key) are added in
+# later phases. The values below are placeholders for local development.
+apps:
+  - id: gotalk
+    name: Gotalk
+    ios:
+      bundle_id: app.example.gotalk
+    android:
+      package_name: app.example.gotalk
+    web:
+      # Uncompressed P-256 public key, base64url without padding. Placeholder: replace with
+      # your own VAPID public key.
+      vapid_public_key: BExMJ__m8K0lZhFzYG_SNZhoRmRL6BbVOMd25fGlwCN2uGyylC_WegHE-InIhLxpzs3kl6KqUfAS6lMIoFdne2Y

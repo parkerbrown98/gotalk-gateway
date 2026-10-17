@@ -1,0 +1,35 @@
+version: "2"
+
+run:
+  timeout: 5m
+
+linters:
+  default: standard
+  enable:
+    - bodyclose
+    - errorlint
+    - gosec
+    - misspell
+    - nilerr
+    - revive
+    - unconvert
+  exclusions:
+    paths:
+      - internal/store
+    rules:
+      - path: _test\.go
+        linters: [gosec]
+  settings:
+    revive:
+      rules:
+        - name: exported
+          disabled: true
+
+formatters:
+  enable:
+    - gofmt
+    - goimports
+  settings:
+    goimports:
+      local-prefixes:
+        - github.com/parkerbrown98/gotalk-gateway

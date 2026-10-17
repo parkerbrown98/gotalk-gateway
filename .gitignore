@@ -1,0 +1,7 @@
+/bin/
+/dist/
+/gotalk-gateway
+/gotalk-gateway.exe
+coverage.out
+.env
+*.local.yaml

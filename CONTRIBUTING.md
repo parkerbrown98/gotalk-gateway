@@ -1,7 +1,8 @@
 # Contributing
 
-Gotalk Push Gateway is licensed under [AGPL-3.0-only](LICENSE). The project is in its design phase; see
-[docs/gateway-plan.md](docs/gateway-plan.md) for what is being built and [docs/](docs/README.md) for the protocol.
+Gotalk Push Gateway is licensed under [AGPL-3.0-only](LICENSE). See
+[docs/gateway-plan.md](docs/gateway-plan.md) for what is being built, [docs/](docs/README.md) for the protocol, and
+[docs/development.md](docs/development.md) to build, test and lint the code. Pull requests must pass CI.
 
 ## Developer Certificate of Origin
 

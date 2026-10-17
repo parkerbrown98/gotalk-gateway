@@ -107,7 +107,7 @@ phases below are not blocked on surprises.
 
 ## Phases
 
-Status key: ⬜ not started · 🟨 in progress · ✅ done. Nothing has been built yet.
+Status key: ⬜ not started · 🟨 in progress · ✅ done.
 
 ### Phase 0 — Protocol and decisions 🟨
 
@@ -145,7 +145,7 @@ Deliverables:
   envelope stays draft until it passes
 - ⬜ Review of the protocol, threat model and OpenAPI
 
-### Phase 1 — Foundation ⬜
+### Phase 1 — Foundation ✅
 
 - Repository scaffold: `cmd/gotalk-gateway`, `internal/` packages, `Dockerfile`, `docker-compose.yml`,
   `config.example.yaml`, `sqlc.yaml`, `Makefile`.
@@ -159,6 +159,26 @@ Deliverables:
 - The repo is public from this phase.
 
 Done when `docker compose up` yields a running gateway that passes health checks and serves discovery.
+
+Deliverables:
+
+- ✅ Scaffold and `Makefile` (see [development.md](development.md)). The `river` queue and OpenTelemetry tracing are
+  not added yet, because nothing in this phase uses them. Phase 4 adds the queue.
+- ✅ Configuration ([configuration.md](configuration.md)): defaults, YAML file, `GOTALK_GATEWAY_*` (with `_FILE`
+  secrets), and `--set`/shorthand flags, all validated at startup. Structured logging with `log/slog`.
+- ✅ Schema v1 in [00001_schema_v1.sql](../internal/database/migrations/00001_schema_v1.sql), applied by goose under
+  an advisory lock. Constraints are tested against PostgreSQL. Apps are declared in config and synced into
+  `apps` at startup. Apps that are removed are disabled, not deleted.
+- ✅ `/healthz`, `/readyz` (database and Redis checks, `draining` during shutdown, no error details on the public
+  endpoint), `/metrics` (optionally on its own listener), `SIGTERM` handling with a configurable drain delay.
+- ✅ Discovery on both paths, matching the protocol document. The gateway's public keys are the per-app VAPID keys
+  in `apps[].platforms.web`. Errors use `application/problem+json` with protocol codes and request IDs.
+  `not_found` and `method_not_allowed` were added to the error table for unknown routes.
+- ✅ CI ([ci.yml](../.github/workflows/ci.yml)): vet, golangci-lint, `sqlc diff`, tests with `-race` and
+  testcontainers, contract validation, an oasdiff breaking-change check on pull requests, a test that keeps the
+  implementation in step with [openapi.yaml](openapi.yaml), a `docker compose up` smoke test, and a multi-arch
+  image pushed to GHCR.
+- ⬜ Make the GitHub repository public (a publisher action).
 
 ### Phase 2 — Instance registration and request authentication ⬜
 

@@ -1,0 +1,56 @@
+# Gotalk push gateway quick start: `docker compose up -d`, then
+# curl http://localhost:8090/.well-known/gotalk-gateway
+#
+# For anything beyond local use, set POSTGRES_PASSWORD and GOTALK_GATEWAY_SERVER_PUBLIC_URL
+# in a .env file next to this one, and mount your own config file instead of the example.
+name: gotalk-gateway
+
+services:
+  gateway:
+    build: .
+    image: ghcr.io/parkerbrown98/gotalk-gateway:latest
+    restart: unless-stopped
+    ports:
+      - "${GOTALK_GATEWAY_PORT:-8090}:8090"
+    environment:
+      GOTALK_GATEWAY_CONFIG: /etc/gotalk-gateway/config.yaml
+      GOTALK_GATEWAY_DATABASE_URL: "host=postgres port=5432 user=gotalk dbname=gotalk_gateway sslmode=disable"
+      PGPASSWORD: ${POSTGRES_PASSWORD:-gotalk}
+      GOTALK_GATEWAY_REDIS_URL: redis://redis:6379/0
+      GOTALK_GATEWAY_SERVER_PUBLIC_URL: ${GOTALK_GATEWAY_SERVER_PUBLIC_URL:-}
+      GOTALK_GATEWAY_LOG_LEVEL: ${GOTALK_GATEWAY_LOG_LEVEL:-}
+      GOTALK_GATEWAY_LOG_FORMAT: ${GOTALK_GATEWAY_LOG_FORMAT:-text}
+    volumes:
+      - ./config.example.yaml:/etc/gotalk-gateway/config.yaml:ro
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  postgres:
+    image: postgres:17-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: gotalk
+      POSTGRES_DB: gotalk_gateway
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-gotalk}
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U gotalk -d gotalk_gateway"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+volumes:
+  postgres-data:

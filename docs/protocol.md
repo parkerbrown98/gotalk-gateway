@@ -490,6 +490,8 @@ Errors use RFC 9457 `application/problem+json` with an extra `code`:
 | `instance_not_found` | 404 | No instance with that origin or ID. |
 | `subscription_not_found` | 404 | Unknown subscription, wrong secret, or bound to another instance. |
 | `push_not_found` | 404 | Unknown push, or not sent by this instance. |
+| `not_found` | 404 | No endpoint at this path. |
+| `method_not_allowed` | 405 | The endpoint does not support this method. |
 | `conflict` | 409 | The operation conflicts with current state (for example revoking the last key). |
 | `subscription_gone` | 410 | The provider rejected the token. Delete the subscription. |
 | `payload_too_large` | 413 | Request body or `payload` over the limit. |
