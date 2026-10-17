@@ -16,6 +16,7 @@ import (
 
 	"github.com/parkerbrown98/gotalk-gateway/internal/apps"
 	"github.com/parkerbrown98/gotalk-gateway/internal/config"
+	"github.com/parkerbrown98/gotalk-gateway/internal/problem"
 )
 
 const testVAPIDKey = "BExMJ__m8K0lZhFzYG_SNZhoRmRL6BbVOMd25fGlwCN2uGyylC_WegHE-InIhLxpzs3kl6KqUfAS6lMIoFdne2Y"
@@ -160,8 +161,8 @@ func TestDiscoveryRegistryUnavailable(t *testing.T) {
 	rec := h.do("GET", "/v1/gateway", nil)
 	assert.Equal(t, 503, rec.Code)
 	assert.Equal(t, "application/problem+json", rec.Header().Get("Content-Type"))
-	p := decode[Problem](t, rec)
-	assert.Equal(t, CodeProviderUnavailable, p.Code)
+	p := decode[problem.Problem](t, rec)
+	assert.Equal(t, problem.ProviderUnavailable, p.Code)
 	assert.Equal(t, rec.Header().Get(RequestIDHeader), p.RequestID)
 	assert.NotContains(t, rec.Body.String(), "connection refused")
 }
@@ -210,8 +211,8 @@ func TestProblems(t *testing.T) {
 	rec := h.do("GET", "/v1/nope", nil)
 	assert.Equal(t, 404, rec.Code)
 	assert.Equal(t, "application/problem+json", rec.Header().Get("Content-Type"))
-	p := decode[Problem](t, rec)
-	assert.Equal(t, CodeNotFound, p.Code)
+	p := decode[problem.Problem](t, rec)
+	assert.Equal(t, problem.NotFound, p.Code)
 	assert.Equal(t, "https://gotalk.app/problems/not-found", p.Type)
 	assert.Equal(t, 404, p.Status)
 	assert.True(t, strings.HasPrefix(p.RequestID, "req_"))
@@ -219,7 +220,7 @@ func TestProblems(t *testing.T) {
 
 	rec = h.do("POST", "/v1/gateway", nil)
 	assert.Equal(t, 405, rec.Code)
-	assert.Equal(t, CodeMethodNotAllowed, decode[Problem](t, rec).Code)
+	assert.Equal(t, problem.MethodNotAllowed, decode[problem.Problem](t, rec).Code)
 }
 
 func TestRequestIDIsNotTakenFromClient(t *testing.T) {
@@ -234,7 +235,7 @@ func TestPanicBecomesProblem(t *testing.T) {
 	})
 	rec := h.do("GET", "/readyz", nil)
 	assert.Equal(t, 500, rec.Code)
-	assert.Equal(t, CodeInternalError, decode[Problem](t, rec).Code)
+	assert.Equal(t, problem.InternalError, decode[problem.Problem](t, rec).Code)
 }
 
 func TestMetrics(t *testing.T) {

@@ -48,17 +48,20 @@ func TestOpenAPIMatchesContract(t *testing.T) {
 	assert.Positive(t, implemented)
 
 	contractSchemas := obj(obj(contract["components"])["schemas"])
-	shared := 0
+	var shared []string
 	for name, gen := range obj(obj(generated["components"])["schemas"]) {
 		want := obj(contractSchemas[name])
 		if want == nil {
 			continue
 		}
-		shared++
+		shared = append(shared, name)
 		assert.Equal(t, keys(obj(want["properties"])), keys(obj(obj(gen)["properties"])), "schema %s properties", name)
 		assert.Equal(t, strs(want["required"]), strs(obj(gen)["required"]), "schema %s required", name)
 	}
-	assert.GreaterOrEqual(t, shared, 4, "Gateway, App, GatewayLimits and Problem are shared")
+	assert.Subset(t, shared, []string{
+		"Gateway", "App", "GatewayLimits", "Problem",
+		"RegisterInstanceRequest", "RegisterInstanceResponse", "Instance", "InstanceKey", "AddKeyRequest",
+	}, "implemented schemas are compared with the contract")
 }
 
 // schemaRefOf returns the schema name of the first 2xx JSON response, following one level

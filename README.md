@@ -5,8 +5,9 @@ end-to-end encrypted notification payloads to the gateway, and the gateway forwa
 Push. The gateway never sees notification content. [docs/gateway-plan.md](docs/gateway-plan.md) explains why it
 exists, and [docs/protocol.md](docs/protocol.md) specifies the protocol.
 
-**Status:** Phase 1 (foundation) is done. The gateway runs, migrates its database, serves discovery, health,
-readiness and metrics. Instance registration, device subscriptions and delivery come in Phases 2 to 5.
+**Status:** Phases 1 and 2 are done. The gateway serves discovery, health, readiness and metrics. Instances can
+register, prove domain control, rotate and recover keys, and make Ed25519-signed requests. Device subscriptions
+and delivery come in Phases 3 to 5.
 
 ## Quick start
 
@@ -29,6 +30,10 @@ To run from source against the Compose database: `docker compose up -d postgres 
 | `GET /healthz` | Liveness: the process is serving HTTP. |
 | `GET /readyz` | Readiness: PostgreSQL (and Redis, when configured) answer, and the gateway is not shutting down. Returns `503` otherwise. |
 | `GET /metrics` | Prometheus metrics. Can move to its own listener with `metrics.addr`. |
+| `POST /v1/instances` | Register an instance origin and Ed25519 public key (or start key recovery). |
+| `GET`, `DELETE /v1/instances/{id}` | Instance status, keys and usage; deregistration. Signed. |
+| `POST /v1/instances/{id}/verify` | Fetch the origin's `/.well-known/gotalk-instance` and activate advertised keys. Signed. |
+| `POST /v1/instances/{id}/keys`, `DELETE /v1/instances/{id}/keys/{key_id}` | Key rotation. Signed. |
 | `GET /v1/openapi.json`, `/v1/openapi.yaml` | OpenAPI 3.1 spec of the implemented endpoints. The full contract is [docs/openapi.yaml](docs/openapi.yaml). |
 
 Errors use `application/problem+json` with a stable `code` ([docs/protocol.md](docs/protocol.md#errors)). Every
@@ -43,6 +48,8 @@ gotalk-gateway migrate status   Show the schema version
 gotalk-gateway healthcheck      Exit 0 if the local gateway is healthy (container HEALTHCHECK)
 gotalk-gateway openapi          Print the OpenAPI spec of the implemented endpoints
 gotalk-gateway version          Print the version
+gotalk-gateway instances …      List, show, block, unblock or delete instances
+gotalk-gateway blocklist …      Block origins, domains or client networks
 ```
 
 Every command accepts `--config FILE`, `--set KEY=VALUE` (repeatable), `--addr`, `--log-level` and `--log-format`.

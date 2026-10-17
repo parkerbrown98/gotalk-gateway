@@ -59,7 +59,13 @@ paths:
                 $ref: "#/components/schemas/RegisterInstanceResponse"
         "400":
           $ref: "#/components/responses/Problem"
+        "403":
+          $ref: "#/components/responses/Problem"
+        "409":
+          $ref: "#/components/responses/Problem"
         "413":
+          $ref: "#/components/responses/Problem"
+        "415":
           $ref: "#/components/responses/Problem"
         "422":
           $ref: "#/components/responses/Problem"
@@ -84,6 +90,8 @@ paths:
                 $ref: "#/components/schemas/Instance"
         "401":
           $ref: "#/components/responses/Problem"
+        "403":
+          $ref: "#/components/responses/Problem"
         "404":
           $ref: "#/components/responses/Problem"
         "429":
@@ -98,6 +106,8 @@ paths:
         "204":
           description: Deleted.
         "401":
+          $ref: "#/components/responses/Problem"
+        "403":
           $ref: "#/components/responses/Problem"
         "404":
           $ref: "#/components/responses/Problem"
@@ -121,7 +131,11 @@ paths:
                 $ref: "#/components/schemas/Instance"
         "401":
           $ref: "#/components/responses/Problem"
+        "403":
+          $ref: "#/components/responses/Problem"
         "404":
+          $ref: "#/components/responses/Problem"
+        "409":
           $ref: "#/components/responses/Problem"
         "422":
           $ref: "#/components/responses/Problem"
@@ -152,9 +166,15 @@ paths:
                 $ref: "#/components/schemas/InstanceKey"
         "401":
           $ref: "#/components/responses/Problem"
+        "403":
+          $ref: "#/components/responses/Problem"
         "404":
           $ref: "#/components/responses/Problem"
         "409":
+          $ref: "#/components/responses/Problem"
+        "413":
+          $ref: "#/components/responses/Problem"
+        "415":
           $ref: "#/components/responses/Problem"
         "422":
           $ref: "#/components/responses/Problem"
@@ -179,6 +199,8 @@ paths:
         "204":
           description: Revoked.
         "401":
+          $ref: "#/components/responses/Problem"
+        "403":
           $ref: "#/components/responses/Problem"
         "404":
           $ref: "#/components/responses/Problem"
@@ -535,6 +557,7 @@ components:
             - instance_not_found
             - subscription_not_found
             - push_not_found
+            - key_not_found
             - not_found
             - method_not_allowed
             - conflict

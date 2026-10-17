@@ -46,7 +46,7 @@ func TestMigrateCreatesSchemaV1(t *testing.T) {
 	st, err := database.Status(ctx, pool)
 	require.NoError(t, err)
 	assert.Equal(t, int64(0), st.Current)
-	assert.Equal(t, int64(1), st.Latest)
+	assert.GreaterOrEqual(t, st.Latest, int64(2))
 
 	require.NoError(t, database.Migrate(ctx, pool, log))
 	require.NoError(t, database.Migrate(ctx, pool, log), "migrating twice is a no-op")

@@ -18,6 +18,7 @@ import (
 	"github.com/stretchr/testify/require"
 	"github.com/testcontainers/testcontainers-go"
 	tcpostgres "github.com/testcontainers/testcontainers-go/modules/postgres"
+	tcredis "github.com/testcontainers/testcontainers-go/modules/redis"
 
 	"github.com/parkerbrown98/gotalk-gateway/internal/database"
 )
@@ -28,13 +29,40 @@ var (
 	adminURL  string
 	startErr  error
 	counter   atomic.Int64
+
+	redisOnce      sync.Once
+	redisContainer *tcredis.RedisContainer
+	redisURL       string
+	redisErr       error
 )
 
-// Terminate stops the shared container. Call it from TestMain after m.Run.
+// Terminate stops the shared containers. Call it from TestMain after m.Run.
 func Terminate() {
 	if container != nil {
 		_ = testcontainers.TerminateContainer(container)
 	}
+	if redisContainer != nil {
+		_ = testcontainers.TerminateContainer(redisContainer)
+	}
+}
+
+// RedisURL returns the URL of a shared Redis container. Tests using it are skipped with
+// -short or when no container runtime is available.
+func RedisURL(t *testing.T) string {
+	t.Helper()
+	if testing.Short() {
+		t.Skip("skipping Redis test in -short mode")
+	}
+	testcontainers.SkipIfProviderIsNotHealthy(t)
+	redisOnce.Do(func() {
+		ctx := context.Background()
+		redisContainer, redisErr = tcredis.Run(ctx, "redis:7-alpine")
+		if redisErr == nil {
+			redisURL, redisErr = redisContainer.ConnectionString(ctx)
+		}
+	})
+	require.NoError(t, redisErr)
+	return redisURL
 }
 
 // URL creates an empty database and returns its connection string. Tests using it are

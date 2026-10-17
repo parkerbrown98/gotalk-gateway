@@ -62,19 +62,21 @@ type Device struct {
 }
 
 type Instance struct {
-	ID                   string
-	Origin               string
-	Status               string
-	ContactEmail         string
-	Software             *string
-	SoftwareVersion      *string
-	BlockedReason        *string
-	VerificationFailures int32
-	PendingExpiresAt     *time.Time
-	VerifiedAt           *time.Time
-	LastVerifiedAt       *time.Time
-	CreatedAt            time.Time
-	UpdatedAt            time.Time
+	ID                    string
+	Origin                string
+	Status                string
+	ContactEmail          string
+	Software              *string
+	SoftwareVersion       *string
+	BlockedReason         *string
+	VerificationFailures  int32
+	PendingExpiresAt      *time.Time
+	VerifiedAt            *time.Time
+	LastVerifiedAt        *time.Time
+	CreatedAt             time.Time
+	UpdatedAt             time.Time
+	NextVerificationAt    *time.Time
+	LastVerificationError *string
 }
 
 type InstanceKey struct {
@@ -86,6 +88,8 @@ type InstanceKey struct {
 	RevokedAt   *time.Time
 	LastUsedAt  *time.Time
 	CreatedAt   time.Time
+	Recovery    bool
+	ExpiresAt   *time.Time
 }
 
 type UsageCounter struct {

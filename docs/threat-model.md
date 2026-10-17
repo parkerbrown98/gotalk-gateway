@@ -63,8 +63,8 @@ An instance operator abuses the gateway or the users registered for it.
 | Pushes to devices registered for other instances | Every subscription is bound to one origin. A signed push whose key belongs to another instance gets `subscription_not_found`. *Test: cross-instance push is rejected.* |
 | Spam to its own subscribers | Per-instance daily quota, per-device hourly cap, urgency and TTL limits, automatic temporary blocks and a manual blocklist with a visible reason. |
 | Impersonating another app or sender in the notification text | The client composes the notification from structured fields and always shows the instance name; the undecrypted fallback is gateway-controlled text. |
-| Registering as someone else's origin | Domain verification through the origin's own well-known document. Squatted pending registrations never verify and expire. |
-| Using the gateway as a request forger (SSRF through verification) | Fetch rules: HTTPS, public addresses only, checked at connect, no redirects, size and time limits, per-IP and per-origin rate limits. *Test: private-range and redirect cases.* |
+| Registering as someone else's origin | Domain verification through the origin's own well-known document. Squatted pending registrations never verify and expire. A recovery key for someone else's verified origin can only call `verify`, so it reveals nothing about the instance. *Test: `TestRecovery`, `TestPrune`.* |
+| Using the gateway as a request forger (SSRF through verification) | Fetch rules: HTTPS, public addresses only, checked at connect, no redirects, size and time limits, per-IP and per-origin rate limits. *Test: private-range and redirect cases (`internal/wellknown`).* |
 | Learning device identity | The instance never gets a token or endpoint, only a subscription ID it was given by the device. A fresh key pair per subscription prevents cross-instance linking by key. |
 
 ### Rogue client
@@ -83,7 +83,7 @@ An instance operator abuses the gateway or the users registered for it.
 |---|---|
 | Attacker pushes as the instance | Limited to that instance's subscriptions and quota. The attacker does not hold the devices' `auth` secrets, so they cannot form valid payloads, but garbage pushes still reach devices as fallback alerts and cost quota. |
 | Silent long-term use | Recovery through domain control: re-registering the origin with a new key advertised in the well-known document revokes every other key (see protocol). Operators get contact-email notices on key changes and anomalies. Gateway operators can block an instance immediately. |
-| Replay of captured requests | Timestamp window, per-key nonce cache, host binding in the signature. |
+| Replay of captured requests | Timestamp window, per-key nonce cache, host binding in the signature. *Test: `TestSignatureRejections`, `TestReplicasShareNoncesThroughRedis`.* |
 
 If the attacker also has the instance's database they hold `p256dh` and `auth` for the subscriptions, and can
 forge convincing content to those devices until the subscriptions are rotated. They cannot read past pushes

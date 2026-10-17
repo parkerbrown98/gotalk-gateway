@@ -2,7 +2,7 @@ VERSION ?= dev
 BIN     := bin/gotalk-gateway
 LDFLAGS := -s -w -X main.version=$(VERSION)
 
-.PHONY: build run test test-unit lint fmt sqlc sqlc-check openapi docker up down logs smoke tidy clean help
+.PHONY: build run test test-unit e2e e2e-up lint fmt sqlc sqlc-check openapi docker up down logs smoke tidy clean help
 
 help: ## List targets
 	@grep -E '^[a-z-]+:.*## ' $(MAKEFILE_LIST) | awk -F':.*## ' '{printf "  %-12s %s\n", $$1, $$2}'
@@ -18,6 +18,12 @@ test: ## Run all tests, including PostgreSQL tests in containers (needs Docker)
 
 test-unit: ## Run tests without PostgreSQL containers
 	go test -short ./...
+
+e2e-up: ## Start the stack in development mode for the end-to-end test
+	docker compose -f docker-compose.yml -f docker-compose.e2e.yml up -d --build --wait
+
+e2e: e2e-up ## Run the end-to-end test against the e2e stack
+	go test -count=1 -tags e2e ./internal/e2e
 
 lint: ## Run golangci-lint
 	golangci-lint run

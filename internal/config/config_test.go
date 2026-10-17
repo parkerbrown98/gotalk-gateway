@@ -170,6 +170,28 @@ apps:
 	}
 }
 
+func TestInstancesAndRateLimit(t *testing.T) {
+	cfg, err := load("", nil, environ())
+	require.NoError(t, err)
+	assert.False(t, cfg.Instances.AllowHTTP)
+	assert.Empty(t, cfg.Instances.AllowedPorts)
+	assert.Equal(t, map[string]string{"registration": "5-H", "signed": "1200-M", "verification": "12-H"}, cfg.RateLimit.Rules())
+
+	cfg, err = load("", map[string]string{"ratelimit.enabled": "false"}, environ(
+		"GOTALK_GATEWAY_INSTANCES_ALLOWED_PORTS=8443, 9443",
+		"GOTALK_GATEWAY_INSTANCES_ALLOW_PRIVATE_NETWORKS=true",
+	))
+	require.NoError(t, err)
+	assert.Equal(t, []int{8443, 9443}, cfg.Instances.AllowedPorts)
+	assert.True(t, cfg.Instances.AllowPrivateNetworks)
+	assert.Empty(t, cfg.RateLimit.Rules(), "disabled rate limiting has no rules")
+
+	_, err = load("", map[string]string{"ratelimit.signed": "lots", "instances.allowed_ports": "70000"}, environ())
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "ratelimit.signed")
+	assert.Contains(t, err.Error(), "instances.allowed_ports")
+}
+
 func TestMetricsAddrMustDifferFromServer(t *testing.T) {
 	_, err := load("", map[string]string{"metrics.addr": ":8090"}, environ())
 	require.ErrorContains(t, err, "metrics.addr must differ")

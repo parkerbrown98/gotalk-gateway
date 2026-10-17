@@ -29,6 +29,7 @@ import (
 	"github.com/knadh/koanf/providers/file"
 	"github.com/knadh/koanf/v2"
 	"github.com/redis/go-redis/v9"
+	"github.com/ulule/limiter/v3"
 
 	"github.com/parkerbrown98/gotalk-gateway/internal/apps"
 )
@@ -40,13 +41,15 @@ const (
 )
 
 type Config struct {
-	Server   Server     `koanf:"server"`
-	Database Database   `koanf:"database"`
-	Redis    Redis      `koanf:"redis"`
-	Log      Log        `koanf:"log"`
-	Metrics  Metrics    `koanf:"metrics"`
-	Gateway  Gateway    `koanf:"gateway"`
-	Apps     []apps.App `koanf:"apps"`
+	Server    Server     `koanf:"server"`
+	Database  Database   `koanf:"database"`
+	Redis     Redis      `koanf:"redis"`
+	Log       Log        `koanf:"log"`
+	Metrics   Metrics    `koanf:"metrics"`
+	Gateway   Gateway    `koanf:"gateway"`
+	Instances Instances  `koanf:"instances"`
+	RateLimit RateLimit  `koanf:"ratelimit"`
+	Apps      []apps.App `koanf:"apps"`
 }
 
 type Server struct {
@@ -111,6 +114,37 @@ type Gateway struct {
 	SubscriptionExpiryDays int `koanf:"subscription_expiry_days"`
 }
 
+// Instances controls instance registration and domain verification.
+type Instances struct {
+	// AllowHTTP accepts http:// origins. Development only: the origin's well-known document
+	// is the root of trust, and plain HTTP lets anyone on the path forge it.
+	AllowHTTP bool `koanf:"allow_http"`
+	// AllowPrivateNetworks lets verification fetch loopback, private and link-local
+	// addresses. Development only: otherwise registration can probe the internal network.
+	AllowPrivateNetworks bool `koanf:"allow_private_networks"`
+	// AllowedPorts lists origin ports allowed besides the scheme's default (443 or 80).
+	AllowedPorts []int `koanf:"allowed_ports"`
+}
+
+// RateLimit rates use the "<limit>-<period>" format, where period is S, M, H or D.
+type RateLimit struct {
+	Enabled bool `koanf:"enabled"`
+	// Registration limits POST /v1/instances per client IP.
+	Registration string `koanf:"registration"`
+	// Signed limits signed requests per instance.
+	Signed string `koanf:"signed"`
+	// Verification limits on-demand domain verification fetches per signing key.
+	Verification string `koanf:"verification"`
+}
+
+// Rules maps rule names to rates; empty when rate limiting is disabled.
+func (r RateLimit) Rules() map[string]string {
+	if !r.Enabled {
+		return map[string]string{}
+	}
+	return map[string]string{"registration": r.Registration, "signed": r.Signed, "verification": r.Verification}
+}
+
 func defaults() map[string]any {
 	localDB := url.URL{
 		Scheme:   "postgres",
@@ -135,11 +169,18 @@ func defaults() map[string]any {
 		"metrics.enabled":                  true,
 		"gateway.name":                     "Gotalk Push Gateway",
 		"gateway.subscription_expiry_days": 60,
+		"instances.allow_http":             false,
+		"instances.allow_private_networks": false,
+		"instances.allowed_ports":          []int{},
+		"ratelimit.enabled":                true,
+		"ratelimit.registration":           "5-H",
+		"ratelimit.signed":                 "1200-M",
+		"ratelimit.verification":           "12-H",
 	}
 }
 
 // listKeys are split on commas when supplied through the environment or overrides.
-var listKeys = map[string]bool{"server.trusted_proxies": true}
+var listKeys = map[string]bool{"server.trusted_proxies": true, "instances.allowed_ports": true}
 
 // Load builds the configuration. configFile may be empty. overrides maps dotted keys (such
 // as "server.addr") to values and takes precedence over every other layer.
@@ -324,6 +365,20 @@ func (c *Config) Validate() error {
 	}
 	if d := c.Gateway.SubscriptionExpiryDays; d < 14 || d > 365 {
 		add("gateway.subscription_expiry_days must be between 14 and 365, got %d", d)
+	}
+	for _, p := range c.Instances.AllowedPorts {
+		if p < 1 || p > 65535 {
+			add("instances.allowed_ports contains an invalid port %d", p)
+		}
+	}
+	for _, f := range []struct{ key, v string }{
+		{"ratelimit.registration", c.RateLimit.Registration},
+		{"ratelimit.signed", c.RateLimit.Signed},
+		{"ratelimit.verification", c.RateLimit.Verification},
+	} {
+		if _, err := limiter.NewRateFromFormatted(f.v); err != nil {
+			add("%s must be <limit>-<period> with period S, M, H or D (e.g. 5-H), got %q", f.key, f.v)
+		}
 	}
 	errs = append(errs, apps.Validate(c.Apps)...)
 

@@ -72,12 +72,20 @@ jobs:
             breaking /base/base.yaml /rev/openapi.yaml --fail-on ERR --severity-levels /rev/oasdiff-levels.txt
 
   compose:
-    name: docker compose smoke test
+    name: docker compose smoke and end-to-end test
     runs-on: ubuntu-latest
+    env:
+      COMPOSE_FILE: docker-compose.yml:docker-compose.e2e.yml
     steps:
       - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
       - run: docker compose up -d --build --wait --wait-timeout 180
       - run: ./scripts/smoke.sh http://localhost:8090
+      # Registers an instance against the real binary, verifies it through the test's own
+      # well-known server, and exercises signed requests, replay, rotation and recovery.
+      - run: go test -count=1 -tags e2e ./internal/e2e
       - name: Graceful shutdown
         run: |
           docker compose stop gateway

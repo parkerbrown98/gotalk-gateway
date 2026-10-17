@@ -178,9 +178,9 @@ Deliverables:
   testcontainers, contract validation, an oasdiff breaking-change check on pull requests, a test that keeps the
   implementation in step with [openapi.yaml](openapi.yaml), a `docker compose up` smoke test, and a multi-arch
   image pushed to GHCR.
-- ⬜ Make the GitHub repository public (a publisher action).
+- ✅ The repository is public on GitHub, and CI passes on `main`.
 
-### Phase 2 — Instance registration and request authentication ⬜
+### Phase 2 — Instance registration and request authentication ✅
 
 - `POST /v1/instances`: an instance registers its origin, Ed25519 public key and operator contact.
 - Domain verification: the gateway fetches `/.well-known/gotalk-instance` and checks that it advertises the
@@ -192,6 +192,52 @@ Deliverables:
 
 Done when an instance can register, verify and make authenticated calls, and replayed, stale and
 mis-signed requests are rejected in tests.
+
+Deliverables:
+
+- ✅ `POST /v1/instances` with origin normalization (IDN, default ports, https only unless in development mode),
+  key and contact validation, and idempotent repeats. Implemented in
+  [instances.go](../internal/instances/instances.go).
+- ✅ Domain verification through `/.well-known/gotalk-instance` (the protocol settled on the advertised key, so
+  there is no separate challenge token). The SSRF-guarded fetcher in
+  [wellknown.go](../internal/wellknown/wellknown.go):
+  - checks the resolved address on every connection, which covers DNS rebinding;
+  - allows only configured ports;
+  - follows no redirects and uses no proxies;
+  - enforces a 5 second timeout, a 64 KiB size limit and the JSON content type;
+  - caps concurrent fetches.
+
+  Scheduled re-verification runs every 24 hours, with replicas claiming disjoint batches. Three scheduled failures
+  suspend an instance. Explicit `verify` failures never count, so nobody can trigger a suspension.
+- ✅ Signed-request middleware ([auth.go](../internal/api/auth.go)) that applies the protocol's checks in order:
+  - well-formed headers;
+  - a live key;
+  - the ±300 s timestamp window (a stale timestamp returns `Date`);
+  - `Content-Digest`;
+  - the Ed25519 signature over the public host;
+  - the nonce, stored in Redis or memory for 600 s and recorded only after the signature verifies;
+  - the instance status and permissions;
+  - the rate limits.
+
+  [signing](../internal/signing/signing.go) is tested against the Appendix A vector.
+- ✅ Key rotation (at most 3 active or pending keys; the last active key cannot be revoked). Recovery by
+  re-registering a verified origin: the new key is activated once it is advertised, and all other keys are
+  revoked. Pending recovery keys may only call `verify`, expire after 24 hours, and are capped at 3.
+- ✅ Rate limits with `X-RateLimit-*` and `Retry-After`, in Redis or memory, configurable: registration per IP,
+  signed requests per instance, and verification per signing key. A blocklist of origins, domains and client
+  networks is cached in memory. Operators block and unblock instances with a reason shown to the instance
+  (`gotalk-gateway instances …` and `blocklist …`).
+- ✅ Deregistration deletes the instance with its keys, subscriptions, usage and delivery log. Expired pending
+  registrations and recovery keys are pruned.
+- ✅ Tests against PostgreSQL and Redis containers cover:
+  - the lifecycle, rotation and recovery;
+  - stale, replayed, mis-signed, tampered and wrong-host requests;
+  - cross-instance access;
+  - the blocklist, rate limits, scheduled suspension and pruning;
+  - nonces shared between replicas.
+
+  An end-to-end test (`make e2e`, also in CI) runs the same flow against the built container. The contract
+  gained `key_not_found` and the additional error responses (no breaking changes).
 
 ### Phase 3 — Device subscriptions ⬜
 

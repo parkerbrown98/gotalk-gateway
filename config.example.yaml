@@ -47,6 +47,27 @@ gateway:
   privacy_url: ""
   subscription_expiry_days: 60
 
+instances:
+  # Development only: accept http:// origins. The origin's well-known document is the root
+  # of trust, and plain HTTP lets anyone on the network path forge it.
+  allow_http: false
+  # Development only: let domain verification fetch loopback, private and link-local
+  # addresses. Leave off in production, or registration can probe your internal network.
+  allow_private_networks: false
+  # Origin ports allowed besides the scheme default (443), e.g. [8443].
+  allowed_ports: []
+
+# Rates are "<limit>-<period>" with period S, M, H or D. Counters are shared through Redis
+# when redis.url is set, and kept per process otherwise.
+ratelimit:
+  enabled: true
+  # POST /v1/instances per client IP (per /64 for IPv6).
+  registration: 5-H
+  # Signed requests per instance.
+  signed: 1200-M
+  # On-demand domain verification fetches per signing key.
+  verification: 12-H
+
 # Apps this gateway delivers for. Devices may only register for listed apps. Apps can only
 # be declared in this file. Provider credentials (APNs, FCM, VAPID private key) are added in
 # later phases. The values below are placeholders for local development.

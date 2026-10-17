@@ -7,6 +7,7 @@ import (
 
 	"github.com/danielgtaylor/huma/v2"
 
+	"github.com/parkerbrown98/gotalk-gateway/internal/problem"
 	"github.com/parkerbrown98/gotalk-gateway/internal/protocol"
 )
 
@@ -83,7 +84,7 @@ func (s *Server) getGateway(ctx context.Context, _ *struct{}) (*gatewayOutput, e
 	list, err := s.Apps.List(ctx)
 	if err != nil {
 		s.Logger.ErrorContext(ctx, "listing apps for discovery", "error", err.Error(), "request_id", requestIDFrom(ctx))
-		p := NewProblem(http.StatusServiceUnavailable, CodeProviderUnavailable, "The app registry is temporarily unavailable.")
+		p := problem.New(http.StatusServiceUnavailable, problem.ProviderUnavailable, "The app registry is temporarily unavailable.")
 		p.RequestID = requestIDFrom(ctx)
 		return nil, p
 	}

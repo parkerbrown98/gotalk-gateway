@@ -79,6 +79,58 @@ Exported metrics include `gotalk_gateway_http_requests_total{method,route,status
 | `privacy_url` | (empty) | Privacy policy URL, listed in discovery when set. |
 | `subscription_expiry_days` | `60` | How long a device subscription lives without a refresh, from 14 to 365 days. |
 
+### `instances`
+
+Instance registration and domain verification. Leave these at their defaults in production.
+
+| Key | Default | Description |
+|---|---|---|
+| `allow_http` | `false` | Accept `http://` origins. Development only: the origin's well-known document is the root of trust, and plain HTTP lets anyone on the network path forge it. |
+| `allow_private_networks` | `false` | Let verification fetch loopback, private, link-local and other non-public addresses. Development only: otherwise anyone can use registration to probe the gateway's internal network. |
+| `allowed_ports` | `[]` | Origin ports allowed besides the scheme's default (443), for example `[8443]`. Registration refuses other ports, and verification connects only to allowed ports. |
+
+Verification fetches always refuse redirects and proxies. They time out after 5 seconds, are limited to 64 KiB of
+`application/json`, and run at most 16 at a time. The address is checked on every connection, after DNS
+resolution.
+
+### `ratelimit`
+
+Rates use `<limit>-<period>`, where the period is `S`, `M`, `H` or `D`. When `redis.url` is set, counters are shared
+through Redis; otherwise each process keeps its own. Limited responses carry `X-RateLimit-Limit`,
+`X-RateLimit-Remaining` and `X-RateLimit-Reset`. A `429` also carries `Retry-After`.
+
+| Key | Default | Description |
+|---|---|---|
+| `enabled` | `true` | Turn every limit off with `false` (for example, behind your own rate limiter). |
+| `registration` | `5-H` | `POST /v1/instances` per client IP (per /64 for IPv6). |
+| `signed` | `1200-M` | Signed requests per instance. |
+| `verification` | `12-H` | `POST /v1/instances/{id}/verify` per signing key. Each one fetches the origin. The limit is per key so that someone who registers a key for another origin cannot use up that origin owner's budget. |
+
+## Operator commands
+
+Blocks and instance changes are made with the CLI against the same database. Running gateways pick up blocklist
+changes within 30 seconds, and instance blocks immediately.
+
+```sh
+gotalk-gateway instances list [--status pending|active|suspended|blocked] [--limit N]
+gotalk-gateway instances show ID|ORIGIN
+gotalk-gateway instances block ID|ORIGIN --reason "Shown to the instance operator."
+gotalk-gateway instances unblock ID|ORIGIN        # re-verified within a minute
+gotalk-gateway instances delete ID|ORIGIN --yes   # deletes its subscriptions too
+gotalk-gateway blocklist list
+gotalk-gateway blocklist add origin|domain|cidr VALUE --reason TEXT [--expires 72h]
+gotalk-gateway blocklist remove origin|domain|cidr VALUE
+```
+
+How the blocklist kinds match:
+
+- `origin` matches one origin exactly.
+- `domain` matches a host and all its subdomains, which blocks registration and every signed request from
+  matching instances.
+- `cidr` matches client addresses on unsigned endpoints, such as registration.
+
+In the container, run the commands as `docker compose exec gateway /gotalk-gateway …`.
+
 ### `apps`
 
 The app registry: the bundle IDs, package names and VAPID public keys this gateway serves. Devices can only register

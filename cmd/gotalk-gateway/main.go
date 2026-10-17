@@ -14,6 +14,7 @@ import (
 	"os"
 	"os/signal"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
@@ -23,8 +24,13 @@ import (
 
 	"github.com/parkerbrown98/gotalk-gateway/internal/api"
 	"github.com/parkerbrown98/gotalk-gateway/internal/apps"
+	"github.com/parkerbrown98/gotalk-gateway/internal/blocklist"
 	"github.com/parkerbrown98/gotalk-gateway/internal/config"
 	"github.com/parkerbrown98/gotalk-gateway/internal/database"
+	"github.com/parkerbrown98/gotalk-gateway/internal/instances"
+	"github.com/parkerbrown98/gotalk-gateway/internal/nonce"
+	"github.com/parkerbrown98/gotalk-gateway/internal/ratelimit"
+	"github.com/parkerbrown98/gotalk-gateway/internal/wellknown"
 )
 
 // version is set at build time with -ldflags "-X main.version=...".
@@ -43,6 +49,18 @@ Commands:
   openapi         Print the OpenAPI spec of the implemented endpoints
                     --format yaml|json (default yaml)
   version         Print the version
+
+Operator commands (take effect on running gateways within 30 seconds):
+  instances list [--status S] [--limit N]   List instances
+  instances show ID|ORIGIN                  Show an instance, its keys and usage
+  instances block ID|ORIGIN --reason TEXT   Block a verified instance; the reason is shown to its operator
+  instances unblock ID|ORIGIN               Unblock and re-verify an instance
+  instances delete ID|ORIGIN --yes          Deregister an instance and delete its subscriptions
+  blocklist list                            List blocklist entries
+  blocklist add KIND VALUE --reason TEXT [--expires DURATION]
+                                            Block an origin, a domain (and its subdomains) or
+                                            a cidr (client addresses); e.g. --expires 72h
+  blocklist remove KIND VALUE               Remove an entry
 
 Flags (all commands):
   --config FILE       YAML config file (default: $GOTALK_GATEWAY_CONFIG)
@@ -87,14 +105,23 @@ func main() {
 	}
 }
 
+type adminFlags struct {
+	reason, status string
+	expires        time.Duration
+	limit          int
+	yes            bool
+}
+
+// arity is the number of positional arguments each command accepts: [min, max].
+var arity = map[string][2]int{
+	"serve": {0, 0}, "version": {0, 0}, "help": {0, 0}, "openapi": {0, 0}, "healthcheck": {0, 0},
+	"migrate": {0, 1}, "instances": {1, 2}, "blocklist": {1, 3},
+}
+
 func run(ctx context.Context, args []string, stdout io.Writer) error {
 	cmd := "serve"
 	if len(args) > 0 && !strings.HasPrefix(args[0], "-") {
 		cmd, args = args[0], args[1:]
-	}
-	sub := ""
-	if len(args) > 0 && !strings.HasPrefix(args[0], "-") {
-		sub, args = args[0], args[1:]
 	}
 
 	fs := flag.NewFlagSet(cmd, flag.ContinueOnError)
@@ -106,14 +133,24 @@ func run(ctx context.Context, args []string, stdout io.Writer) error {
 	fs.Var(shorthandFlag{"log.level", overrides}, "log-level", "")
 	fs.Var(shorthandFlag{"log.format", overrides}, "log-format", "")
 	format := fs.String("format", "yaml", "")
-	if err := fs.Parse(args); err != nil {
+	var af adminFlags
+	fs.StringVar(&af.reason, "reason", "", "")
+	fs.StringVar(&af.status, "status", "", "")
+	fs.DurationVar(&af.expires, "expires", 0, "")
+	fs.IntVar(&af.limit, "limit", 100, "")
+	fs.BoolVar(&af.yes, "yes", false, "")
+	positional, err := parseInterleaved(fs, args)
+	if err != nil {
 		if errors.Is(err, flag.ErrHelp) {
 			return nil
 		}
 		return err
 	}
-	if fs.NArg() > 0 || (sub != "" && cmd != "migrate") {
-		return fmt.Errorf("unexpected argument %q for %s", strings.Join(append([]string{sub}, fs.Args()...), " "), cmd)
+	if n, ok := arity[cmd]; ok && (len(positional) < n[0] || len(positional) > n[1]) {
+		if len(positional) < n[0] {
+			return fmt.Errorf("%s needs a subcommand; see gotalk-gateway help", cmd)
+		}
+		return fmt.Errorf("unexpected argument %q for %s", strings.Join(positional[n[1]:], " "), cmd)
 	}
 
 	switch cmd {
@@ -125,6 +162,10 @@ func run(ctx context.Context, args []string, stdout io.Writer) error {
 		return err
 	case "openapi":
 		return printOpenAPI(stdout, *format)
+	}
+	if _, ok := arity[cmd]; !ok {
+		fmt.Fprint(os.Stderr, usage)
+		return fmt.Errorf("unknown command %q", cmd)
 	}
 
 	cfg, err := config.Load(*configFile, overrides)
@@ -138,12 +179,33 @@ func run(ctx context.Context, args []string, stdout io.Writer) error {
 	case "serve":
 		return serve(ctx, cfg, log)
 	case "migrate":
+		sub := ""
+		if len(positional) > 0 {
+			sub = positional[0]
+		}
 		return migrate(ctx, cfg, log, sub, stdout)
-	case "healthcheck":
+	case "instances":
+		return instancesCmd(ctx, cfg, log, positional, af, stdout)
+	case "blocklist":
+		return blocklistCmd(ctx, cfg, log, positional, af, stdout)
+	default: // healthcheck
 		return healthcheck(cfg)
-	default:
-		fmt.Fprint(os.Stderr, usage)
-		return fmt.Errorf("unknown command %q", cmd)
+	}
+}
+
+// parseInterleaved parses flags that may appear before, between or after positional
+// arguments, and returns the positional arguments in order.
+func parseInterleaved(fs *flag.FlagSet, args []string) ([]string, error) {
+	var positional []string
+	for {
+		if err := fs.Parse(args); err != nil {
+			return nil, err
+		}
+		args = fs.Args()
+		if len(args) == 0 {
+			return positional, nil
+		}
+		positional, args = append(positional, args[0]), args[1:]
 	}
 }
 
@@ -245,9 +307,38 @@ func serve(ctx context.Context, cfg *config.Config, log *slog.Logger) error {
 		log.Warn("no apps are configured; devices cannot register until apps are added to the config file")
 	}
 
+	bl := blocklist.NewCache(pool, log)
+	if err := bl.Refresh(ctx); err != nil {
+		return err
+	}
+	if cfg.Instances.AllowHTTP || cfg.Instances.AllowPrivateNetworks {
+		log.Warn("development settings are enabled; never use them in production",
+			"instances.allow_http", cfg.Instances.AllowHTTP, "instances.allow_private_networks", cfg.Instances.AllowPrivateNetworks)
+	}
+	fetcher := wellknown.New(wellknown.Options{
+		AllowPrivateNetworks: cfg.Instances.AllowPrivateNetworks,
+		AllowedPorts:         cfg.Instances.AllowedPorts,
+		UserAgent:            "gotalk-gateway/" + version,
+	})
+	svc := instances.New(pool, fetcher, bl, instances.Options{AllowHTTP: cfg.Instances.AllowHTTP, Logger: log})
+	limiter, err := ratelimit.New(rdb, cfg.RateLimit.Rules())
+	if err != nil {
+		return err
+	}
+
+	bgCtx, stopBackground := context.WithCancel(context.Background())
+	var background sync.WaitGroup
+	background.Go(func() { bl.Run(bgCtx) })
+	background.Go(func() { svc.RunMaintenance(bgCtx) })
+	defer func() {
+		stopBackground()
+		background.Wait()
+	}()
+
 	metrics := api.NewMetrics(version)
 	handler := api.New(api.Deps{
 		Config: cfg, Logger: log, Version: version, Apps: registry, Checks: checks, Metrics: metrics,
+		Instances: svc, Nonces: nonce.New(rdb), Limiter: limiter, Blocklist: bl,
 	})
 	servers := []*http.Server{newHTTPServer(cfg.Server.Addr, handler, log)}
 	if cfg.Metrics.Enabled && cfg.Metrics.Addr != "" {

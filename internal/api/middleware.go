@@ -15,6 +15,7 @@ import (
 	"github.com/go-chi/chi/v5/middleware"
 
 	"github.com/parkerbrown98/gotalk-gateway/internal/ids"
+	"github.com/parkerbrown98/gotalk-gateway/internal/problem"
 )
 
 type ctxKey int
@@ -189,7 +190,7 @@ func (s *Server) recoverer(next http.Handler) http.Handler {
 			}
 			s.Logger.ErrorContext(r.Context(), "panic serving request",
 				"panic", fmt.Sprint(rec), "stack", string(debug.Stack()), "request_id", requestIDFrom(r.Context()))
-			writeProblem(r.Context(), w, NewProblem(http.StatusInternalServerError, CodeInternalError, "Unexpected error."))
+			writeProblem(r.Context(), w, problem.New(http.StatusInternalServerError, problem.InternalError, "Unexpected error."))
 		}()
 		next.ServeHTTP(w, r)
 	})

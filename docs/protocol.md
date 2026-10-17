@@ -156,7 +156,12 @@ list its key in a `push` object:
 
 A key becomes `active` only when the fetched document lists exactly that public key. Verification runs when the
 instance calls `POST /v1/instances/{instance_id}/verify` (signed with the pending key) and again every 24 hours
-while the instance is active.
+while the instance is active or suspended.
+
+- An explicit `verify` activates every advertised pending key and succeeds when the signing key is then active and
+  every active key is advertised. Otherwise it fails with `422 verification_failed` and a `detail` that names the
+  failed check. Explicit failures never count towards suspension, so nobody can suspend an instance by calling
+  `verify` during an outage of its origin. Only the scheduled 24-hour verification counts.
 
 - The origin's well-known document is the root of trust: whoever controls the origin controls the instance.
 - Pending registrations expire after 24 hours. Several pending registrations may exist for one origin. Only a key
@@ -164,6 +169,14 @@ while the instance is active.
 - A verified origin has one `instance_id`. Registering the same origin again with a new key starts **recovery**:
   when the new key is verified, the gateway activates it and revokes every other key of that instance. The
   `instance_id` and its subscriptions are kept. This is the path for a stolen or lost key.
+  - The registration response returns the existing `instance_id` and status.
+  - A recovery key expires 24 hours after registration if it is not verified.
+  - A recovery key can only call `verify` until then, so registering someone else's origin reveals nothing about
+    their instance.
+  - The gateway keeps the 3 newest pending recovery keys per instance. Recovery keys do not count towards the
+    3-key limit, and the instance cannot revoke them (`404 key_not_found`). Otherwise whoever holds a stolen
+    key could cancel the owner's recovery.
+- Repeating a registration with the same origin and key returns the same pending registration.
 - An active key that is no longer advertised fails re-verification. After 3 consecutive failures (72 hours) the
   instance becomes `suspended` and pushes fail with `instance_not_verified` until the key reappears. Existing
   subscriptions are kept.
@@ -176,19 +189,20 @@ connect); no redirects; 5 second timeout; response limited to 64 KiB; `Content-T
 
 | Status | Meaning |
 |---|---|
-| `pending` | Registered, not yet verified. Can only call `verify` and `GET /v1/instances/{id}`. |
+| `pending` | Registered, not yet verified. Can only call `verify` and `GET /v1/instances/{id}`. Deleted after 24 hours. |
 | `active` | Verified. May push. |
 | `suspended` | Verification lapsed. Pushes are refused with `instance_not_verified`. |
 | `blocked` | Blocked by the gateway operator. Pushes are refused with `instance_blocked`; `reason` is returned. |
 
-Other endpoints (all signed by an active key unless noted):
+Other endpoints (all signed by an active key unless noted). A pending rotation key may call `GET` and `verify`;
+a pending recovery key may only call `verify`; other calls with a pending key fail with `instance_not_verified`.
 
 | Endpoint | Purpose |
 |---|---|
 | `GET /v1/instances/{instance_id}` | Status, keys, usage and limits. Allowed while `pending` or `suspended`. |
-| `POST /v1/instances/{instance_id}/verify` | Re-run domain verification now. |
+| `POST /v1/instances/{instance_id}/verify` | Re-run domain verification now. Any live key of the instance, including pending keys. |
 | `POST /v1/instances/{instance_id}/keys` | Add a key (key rotation). The new key must be advertised in the well-known document before it is activated. |
-| `DELETE /v1/instances/{instance_id}/keys/{key_id}` | Revoke a key. The last active key cannot be revoked; deregister instead. |
+| `DELETE /v1/instances/{instance_id}/keys/{key_id}` | Revoke a key. The last active key cannot be revoked (`409 conflict`); deregister instead. Revoking a revoked key succeeds; a key of another instance is `404 key_not_found`. |
 | `DELETE /v1/instances/{instance_id}` | Deregister: deletes the instance and **all** its subscriptions. |
 
 **Rotation without downtime.** Add the new key, publish it in the well-known document next to the old one, wait
@@ -225,6 +239,8 @@ GOTALK-SIG-V1
 
 - `METHOD` is upper case. `HOST` is the gateway's `Host` header value in lower case. `PATH_AND_QUERY` is the
   request target exactly as sent (path, then `?` and the raw query when there is one).
+- A gateway with a configured public URL verifies against that URL's host, so a reverse proxy in front of it may
+  rewrite `Host`. A proxy must not rewrite the path or query.
 - `BODY_SHA256_BASE64URL` is the unpadded base64url SHA-256 of the raw body bytes.
 - Binding the host stops a request signed for one gateway from being replayed to another. The `GOTALK-SIG-V1`
   prefix is the domain separator and the signature version.
@@ -232,14 +248,19 @@ GOTALK-SIG-V1
 Gateway checks, in order, and the error returned for each failure:
 
 1. Headers present and well formed: `invalid_signature`.
-2. Key exists and its instance is not `blocked`: `unknown_key` (also used for revoked keys).
+2. Key exists, is not revoked, and has not expired (a pending registration or recovery key after 24 hours):
+   `unknown_key`.
 3. `|now − timestamp| ≤ 300` seconds: `stale_timestamp`.
 4. `Content-Digest`, when present, matches the body, and `BODY_SHA256` is computed from the body, not the header:
    `invalid_signature`.
 5. Ed25519 signature verifies: `invalid_signature`.
 6. `(key_id, nonce)` has not been seen within the last 600 seconds. The nonce is recorded only after the
    signature verifies: `replayed_nonce`.
-7. The instance status allows the operation: `instance_not_verified` or `instance_blocked`.
+7. The instance status allows the operation:
+   - `instance_blocked` (with the operator's reason) when the instance is blocked or its origin is on the
+     gateway's blocklist.
+   - `instance_not_verified` when the instance or key is pending for an operation that needs an active key.
+   - `instance_not_found` when the path names another instance.
 8. Rate limits and quotas ([Rate limits](#rate-limits)).
 
 Nonce records are kept for twice the skew window (600 s). Single-node deployments without Redis keep them in
@@ -483,13 +504,14 @@ Errors use RFC 9457 `application/problem+json` with an extra `code`:
 | `replayed_nonce` | 401 | Nonce already used within 600 seconds. |
 | `unauthorized` | 401 | Missing or wrong subscription secret on a device endpoint that is not enumeration-sensitive. |
 | `instance_not_verified` | 403 | Instance is `pending` or `suspended`. |
-| `instance_blocked` | 403 | Instance is blocked. `detail` carries the operator's reason. |
+| `instance_blocked` | 403 | Instance is blocked, or its origin or the client address is on the gateway's blocklist. `detail` carries the operator's reason. |
 | `unknown_app` | 422 | `app_id` is not served by this gateway, or not for this platform. |
 | `invalid_token` | 422 | Platform token or endpoint fails validation. |
 | `verification_failed` | 422 | Domain verification failed. `detail` names the check. |
 | `instance_not_found` | 404 | No instance with that origin or ID. |
 | `subscription_not_found` | 404 | Unknown subscription, wrong secret, or bound to another instance. |
 | `push_not_found` | 404 | Unknown push, or not sent by this instance. |
+| `key_not_found` | 404 | The key ID is not a key of the calling instance. |
 | `not_found` | 404 | No endpoint at this path. |
 | `method_not_allowed` | 405 | The endpoint does not support this method. |
 | `conflict` | 409 | The operation conflicts with current state (for example revoking the last key). |
@@ -516,7 +538,8 @@ the actual values are in discovery `limits` and on the instance resource.
 
 | Scope | Default |
 |---|---|
-| `POST /v1/instances` | 5 per hour per IP |
+| `POST /v1/instances` | 5 per hour per IP (IPv6 clients are counted per /64) |
+| `POST /v1/instances/{id}/verify` | 12 per hour per signing key (each one fetches the origin) |
 | `POST /v1/devices` | 60 per hour per IP, 10 per hour per token |
 | Signed requests | 1,200 per minute per instance |
 | Pushes (entries) | 50,000 per day per instance (free tier; plans change this in Phase 10) |
