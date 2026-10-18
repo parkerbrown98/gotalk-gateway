@@ -66,6 +66,15 @@ devices:
     - web.push.apple.com # Safari
     - notify.windows.com # Edge
 
+delivery:
+  # Pushes this replica delivers concurrently. 0 makes it queue pushes without delivering
+  # them (API-only replicas); at least one replica must deliver.
+  workers: 50
+  # Timeout of each request to APNs or FCM.
+  provider_timeout: 10s
+  # How long a push whose retries ran out is kept in the queue with its errors.
+  dead_letter_retention: 24h
+
 # Rates are "<limit>-<period>" with period S, M, H or D. Counters are shared through Redis
 # when redis.url is set, and kept per process otherwise.
 ratelimit:
@@ -84,15 +93,25 @@ ratelimit:
   device_update: 60-H
 
 # Apps this gateway delivers for. Devices may only register for listed apps. Apps can only
-# be declared in this file. Provider credentials (APNs, FCM, VAPID private key) are added in
-# later phases. The values below are placeholders for local development.
+# be declared in this file. The values below are placeholders for local development.
+#
+# Without provider credentials, devices can still register, but pushes to them are refused
+# with provider_unavailable. Prefer the *_file settings with mounted secrets. The VAPID
+# private key for Web Push is added in Phase 5.
 apps:
   - id: gotalk
     name: Gotalk
     ios:
       bundle_id: app.example.gotalk
+      # apns:
+      #   team_id: ABCDE12345          # Apple Developer team ID
+      #   key_id: FGHIJ67890           # ID of the APNs .p8 key
+      #   private_key_file: /run/secrets/apns.p8
     android:
       package_name: app.example.gotalk
+      # fcm:
+      #   service_account_file: /run/secrets/fcm-service-account.json
+      #   project_id: ""               # defaults to the service account's project
     web:
       # Uncompressed P-256 public key, base64url without padding. Placeholder: replace with
       # your own VAPID public key.

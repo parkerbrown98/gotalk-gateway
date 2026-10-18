@@ -1,6 +1,7 @@
 // Package apps is the gateway's app registry. An app is a bundle ID / package name plus
 // provider credentials; devices register for one app. Apps are declared in the config file,
-// synced into the database at startup and listed in the discovery document.
+// synced into the database at startup and listed in the discovery document. Credentials
+// stay in the config: they are never written to the database.
 package apps
 
 import (
@@ -9,6 +10,8 @@ import (
 	"encoding/base64"
 	"errors"
 	"fmt"
+	"net/url"
+	"os"
 	"regexp"
 	"slices"
 	"sync"
@@ -33,10 +36,62 @@ type App struct {
 
 type IOS struct {
 	BundleID string `koanf:"bundle_id"`
+	// APNs holds the credentials pushes are sent with. Without them devices can register,
+	// but pushes to them are refused with provider_unavailable.
+	APNs *APNs `koanf:"apns"`
+}
+
+// APNs is token-based APNs authentication with a .p8 key.
+type APNs struct {
+	TeamID string `koanf:"team_id"`
+	KeyID  string `koanf:"key_id"`
+	// PrivateKey is the PEM contents of the .p8 key; PrivateKeyFile is a path to it. Set one.
+	PrivateKey     string `koanf:"private_key"`
+	PrivateKeyFile string `koanf:"private_key_file"`
+	// ProductionURL and SandboxURL override Apple's endpoints (for testing against a fake).
+	ProductionURL string `koanf:"production_url"`
+	SandboxURL    string `koanf:"sandbox_url"`
+}
+
+// Key returns the .p8 key, reading it from PrivateKeyFile when that is set.
+func (a *APNs) Key() ([]byte, error) {
+	return inlineOrFile(a.PrivateKey, a.PrivateKeyFile)
 }
 
 type Android struct {
 	PackageName string `koanf:"package_name"`
+	// FCM holds the credentials pushes are sent with. Without them devices can register, but
+	// pushes to them are refused with provider_unavailable.
+	FCM *FCM `koanf:"fcm"`
+}
+
+// FCM is a Google service account key for the FCM HTTP v1 API.
+type FCM struct {
+	// ServiceAccount is the JSON key; ServiceAccountFile is a path to it. Set one.
+	ServiceAccount     string `koanf:"service_account"`
+	ServiceAccountFile string `koanf:"service_account_file"`
+	// ProjectID overrides the project_id of the service account.
+	ProjectID string `koanf:"project_id"`
+	// Endpoint overrides https://fcm.googleapis.com (for testing against a fake).
+	Endpoint string `koanf:"endpoint"`
+}
+
+// Credentials returns the service account key, reading it from ServiceAccountFile when that
+// is set.
+func (f *FCM) Credentials() ([]byte, error) {
+	return inlineOrFile(f.ServiceAccount, f.ServiceAccountFile)
+}
+
+func inlineOrFile(inline, path string) ([]byte, error) {
+	if path == "" {
+		return []byte(inline), nil
+	}
+	// Reading an operator-supplied path is the point of the *_file settings.
+	data, err := os.ReadFile(path) //nolint:gosec // path comes from trusted deployment config
+	if err != nil {
+		return nil, err
+	}
+	return data, nil
 }
 
 type Web struct {
@@ -63,6 +118,8 @@ var (
 	idPattern          = regexp.MustCompile(`^[a-z0-9][a-z0-9-]{0,31}$`)
 	bundleIDPattern    = regexp.MustCompile(`^[A-Za-z0-9-]+(\.[A-Za-z0-9-]+)+$`)
 	packageNamePattern = regexp.MustCompile(`^[A-Za-z][A-Za-z0-9_]*(\.[A-Za-z][A-Za-z0-9_]*)+$`)
+	appleIDPattern     = regexp.MustCompile(`^[A-Z0-9]{10}$`)
+	projectIDPattern   = regexp.MustCompile(`^[a-z][a-z0-9-]{4,28}[a-z0-9]$`)
 )
 
 // Validate reports every problem with a list of configured apps.
@@ -88,8 +145,37 @@ func Validate(list []App) []error {
 		if a.IOS != nil && !bundleIDPattern.MatchString(a.IOS.BundleID) {
 			add(i, "ios.bundle_id %q is not a valid bundle ID", a.IOS.BundleID)
 		}
+		if a.IOS != nil && a.IOS.APNs != nil {
+			c := a.IOS.APNs
+			if !appleIDPattern.MatchString(c.TeamID) {
+				add(i, "ios.apns.team_id %q must be the 10-character Apple team ID", c.TeamID)
+			}
+			if !appleIDPattern.MatchString(c.KeyID) {
+				add(i, "ios.apns.key_id %q must be the 10-character ID of the .p8 key", c.KeyID)
+			}
+			if (c.PrivateKey == "") == (c.PrivateKeyFile == "") {
+				add(i, "ios.apns needs exactly one of private_key or private_key_file")
+			}
+			for _, f := range []struct{ key, v string }{{"production_url", c.ProductionURL}, {"sandbox_url", c.SandboxURL}} {
+				if f.v != "" && !absoluteURL(f.v) {
+					add(i, "ios.apns.%s %q must be an absolute http(s) URL", f.key, f.v)
+				}
+			}
+		}
 		if a.Android != nil && !packageNamePattern.MatchString(a.Android.PackageName) {
 			add(i, "android.package_name %q is not a valid package name", a.Android.PackageName)
+		}
+		if a.Android != nil && a.Android.FCM != nil {
+			c := a.Android.FCM
+			if (c.ServiceAccount == "") == (c.ServiceAccountFile == "") {
+				add(i, "android.fcm needs exactly one of service_account or service_account_file")
+			}
+			if c.ProjectID != "" && !projectIDPattern.MatchString(c.ProjectID) {
+				add(i, "android.fcm.project_id %q is not a valid Google Cloud project ID", c.ProjectID)
+			}
+			if c.Endpoint != "" && !absoluteURL(c.Endpoint) {
+				add(i, "android.fcm.endpoint %q must be an absolute http(s) URL", c.Endpoint)
+			}
 		}
 		if a.Web != nil {
 			if err := ValidateVAPIDPublicKey(a.Web.VAPIDPublicKey); err != nil {
@@ -98,6 +184,11 @@ func Validate(list []App) []error {
 		}
 	}
 	return errs
+}
+
+func absoluteURL(v string) bool {
+	u, err := url.Parse(v)
+	return err == nil && (u.Scheme == "https" || u.Scheme == "http") && u.Host != "" && u.RawQuery == "" && u.Fragment == ""
 }
 
 // ValidateVAPIDPublicKey checks that key is an unpadded base64url uncompressed P-256 point.

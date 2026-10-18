@@ -103,6 +103,24 @@ Subscriptions that a provider reports as dead are kept for 7 days and then delet
 |---|---|---|
 | `web_push_hosts` | FCM, Mozilla, Apple and Windows push services | Web Push endpoints must be on one of these hosts or a subdomain: `fcm.googleapis.com`, `updates.push.services.mozilla.com`, `web.push.apple.com`, `notify.windows.com`. Set `[]` to accept any public host. Endpoints must use https on port 443 either way. |
 
+### `delivery`
+
+Accepted pushes are queued in PostgreSQL ([river](https://riverqueue.com)) and delivered by workers on every replica
+that has them. A push to a provider that fails transiently is retried up to 5 times, starting after about a second
+and doubling each time with jitter, or until its TTL runs out. A provider's `Retry-After` is honored. A push whose
+retries run out is dead-lettered: its status becomes `failed`, and its queue job stays `cancelled` (with every
+attempt's error) for `dead_letter_retention`. Completed jobs are deleted after a minute, because they hold the
+encrypted payload; the delivery log keeps IDs, status and latency for 72 hours.
+
+| Key | Default | Description |
+|---|---|---|
+| `workers` | `50` | Pushes this replica delivers concurrently. `0` makes an API-only replica that queues pushes but does not deliver them; at least one replica must deliver. |
+| `provider_timeout` | `10s` | Timeout of each request to APNs or FCM (1s to 1m). |
+| `dead_letter_retention` | `24h` | How long a push whose retries ran out stays in the queue for inspection (1m to 720h). |
+
+On shutdown a replica stops taking new pushes from the queue and lets in-flight deliveries finish within
+`server.shutdown_timeout`. Queued pushes wait for the next replica.
+
 ### `ratelimit`
 
 Rates use `<limit>-<period>`, where the period is `S`, `M`, `H` or `D`. When `redis.url` is set, counters are shared
@@ -163,5 +181,35 @@ apps:
       vapid_public_key: B…     # uncompressed P-256 public key, base64url without padding
 ```
 
-Each app needs at least one platform. Provider credentials (the APNs `.p8` key, the FCM service account and the
-VAPID private key) are added in Phases 4 and 5.
+Each app needs at least one platform.
+
+**Provider credentials.** Without them, devices can still register, but pushes to them are refused with
+`503 provider_unavailable`. Credentials are read at startup, never written to the database, and should be mounted as
+secrets and referenced with the `*_file` settings. Web Push (the VAPID private key) comes in Phase 5; until then
+pushes to web subscriptions are refused the same way.
+
+```yaml
+apps:
+  - id: gotalk
+    name: Gotalk
+    ios:
+      bundle_id: app.example.gotalk
+      apns:
+        team_id: ABCDE12345                      # Apple Developer team ID
+        key_id: FGHIJ67890                       # ID of the APNs authentication key
+        private_key_file: /run/secrets/apns.p8   # or private_key: the PEM contents
+    android:
+      package_name: app.example.gotalk
+      fcm:
+        service_account_file: /run/secrets/fcm.json   # or service_account: the JSON
+        project_id: my-firebase-project               # optional; defaults to the key's project
+```
+
+| Key | Description |
+|---|---|
+| `ios.apns.team_id`, `ios.apns.key_id` | The 10-character team ID and key ID of an APNs authentication key (`.p8`). One key serves every app of the team, in both environments. |
+| `ios.apns.private_key`, `ios.apns.private_key_file` | The `.p8` key. Set exactly one. The gateway signs a provider token with it and replaces the token every 50 minutes. |
+| `ios.apns.production_url`, `ios.apns.sandbox_url` | Override Apple's endpoints, for testing against a fake. A subscription's `apns_environment` picks one. |
+| `android.fcm.service_account`, `android.fcm.service_account_file` | A Google service account key (JSON) allowed to send with the FCM HTTP v1 API (the "Firebase Cloud Messaging API Admin" role, or `cloudmessaging.messages.create`). Set exactly one. |
+| `android.fcm.project_id` | The Firebase project, when it differs from the key's `project_id`. |
+| `android.fcm.endpoint` | Overrides `https://fcm.googleapis.com`, for testing against a fake. |

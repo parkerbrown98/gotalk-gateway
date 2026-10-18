@@ -51,6 +51,7 @@ type Config struct {
 	Gateway   Gateway    `koanf:"gateway"`
 	Instances Instances  `koanf:"instances"`
 	Devices   Devices    `koanf:"devices"`
+	Delivery  Delivery   `koanf:"delivery"`
 	RateLimit RateLimit  `koanf:"ratelimit"`
 	Apps      []apps.App `koanf:"apps"`
 }
@@ -136,6 +137,18 @@ type Devices struct {
 	WebPushHosts []string `koanf:"web_push_hosts"`
 }
 
+// Delivery controls the push queue and the provider clients.
+type Delivery struct {
+	// Workers is how many pushes this replica delivers concurrently. 0 makes it accept and
+	// queue pushes without delivering any (for API-only replicas).
+	Workers int `koanf:"workers"`
+	// ProviderTimeout bounds each request to APNs or FCM.
+	ProviderTimeout time.Duration `koanf:"provider_timeout"`
+	// DeadLetterRetention is how long a push whose retries ran out stays in the queue, with
+	// its errors, for inspection.
+	DeadLetterRetention time.Duration `koanf:"dead_letter_retention"`
+}
+
 // RateLimit rates use the "<limit>-<period>" format, where period is S, M, H or D.
 type RateLimit struct {
 	Enabled bool `koanf:"enabled"`
@@ -199,6 +212,9 @@ func defaults() map[string]any {
 		"ratelimit.device_token":           "10-H",
 		"ratelimit.device_update":          "60-H",
 		"devices.web_push_hosts":           slices.Clone(devices.DefaultWebPushHosts),
+		"delivery.workers":                 50,
+		"delivery.provider_timeout":        "10s",
+		"delivery.dead_letter_retention":   "24h",
 	}
 }
 
@@ -412,6 +428,15 @@ func (c *Config) Validate() error {
 			add("devices.web_push_hosts contains an invalid host name %q (use a name like fcm.googleapis.com)", c.Devices.WebPushHosts[i])
 		}
 		c.Devices.WebPushHosts[i] = h
+	}
+	if w := c.Delivery.Workers; w < 0 || w > 10000 {
+		add("delivery.workers must be between 0 and 10000, got %d", w)
+	}
+	if d := c.Delivery.ProviderTimeout; d < time.Second || d > time.Minute {
+		add("delivery.provider_timeout must be between 1s and 1m, got %s", d)
+	}
+	if d := c.Delivery.DeadLetterRetention; d < time.Minute || d > 30*24*time.Hour {
+		add("delivery.dead_letter_retention must be between 1m and 720h, got %s", d)
 	}
 	errs = append(errs, apps.Validate(c.Apps)...)
 

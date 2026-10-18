@@ -127,6 +127,85 @@ apps:
 	assert.Equal(t, testVAPIDKey, cfg.Apps[0].Web.VAPIDPublicKey)
 	assert.Equal(t, []string{"android"}, cfg.Apps[1].Platforms())
 	assert.Nil(t, cfg.Apps[1].IOS)
+	assert.Nil(t, cfg.Apps[0].IOS.APNs, "credentials are optional")
+}
+
+func TestProviderCredentials(t *testing.T) {
+	dir := t.TempDir()
+	keyFile := filepath.Join(dir, "apns.p8")
+	require.NoError(t, os.WriteFile(keyFile, []byte("-----BEGIN PRIVATE KEY-----"), 0o600))
+	path := writeFile(t, `
+apps:
+  - id: gotalk
+    name: Gotalk
+    ios:
+      bundle_id: app.example.gotalk
+      apns:
+        team_id: TEAM123456
+        key_id: KEY1234567
+        private_key_file: `+keyFile+`
+        sandbox_url: http://localhost:9999
+    android:
+      package_name: app.example.gotalk
+      fcm:
+        service_account: '{"type":"service_account"}'
+        project_id: demo-project
+`)
+	cfg, err := load(path, nil, environ())
+	require.NoError(t, err)
+	a := cfg.Apps[0]
+	key, err := a.IOS.APNs.Key()
+	require.NoError(t, err)
+	assert.Equal(t, "-----BEGIN PRIVATE KEY-----", string(key))
+	assert.Equal(t, "http://localhost:9999", a.IOS.APNs.SandboxURL)
+	sa, err := a.Android.FCM.Credentials()
+	require.NoError(t, err)
+	assert.JSONEq(t, `{"type":"service_account"}`, string(sa))
+	assert.Equal(t, "demo-project", a.Android.FCM.ProjectID)
+
+	path = writeFile(t, `
+apps:
+  - id: gotalk
+    name: Gotalk
+    ios:
+      bundle_id: app.example.gotalk
+      apns:
+        team_id: team
+        key_id: KEY1234567
+        private_key: x
+        private_key_file: y
+        production_url: ftp://apple
+    android:
+      package_name: app.example.gotalk
+      fcm:
+        project_id: Bad_Project
+        endpoint: /relative
+`)
+	_, err = load(path, nil, environ())
+	require.Error(t, err)
+	for _, want := range []string{
+		"ios.apns.team_id", "exactly one of private_key or private_key_file", "ios.apns.production_url",
+		"exactly one of service_account or service_account_file", "android.fcm.project_id", "android.fcm.endpoint",
+	} {
+		assert.Contains(t, err.Error(), want)
+	}
+}
+
+func TestDelivery(t *testing.T) {
+	cfg, err := load("", nil, environ())
+	require.NoError(t, err)
+	assert.Equal(t, Delivery{Workers: 50, ProviderTimeout: 10 * time.Second, DeadLetterRetention: 24 * time.Hour}, cfg.Delivery)
+
+	cfg, err = load("", nil, environ("GOTALK_GATEWAY_DELIVERY_WORKERS=0", "GOTALK_GATEWAY_DELIVERY_DEAD_LETTER_RETENTION=1h"))
+	require.NoError(t, err)
+	assert.Zero(t, cfg.Delivery.Workers, "0 makes an API-only replica")
+	assert.Equal(t, time.Hour, cfg.Delivery.DeadLetterRetention)
+
+	_, err = load("", map[string]string{"delivery.workers": "-1", "delivery.provider_timeout": "0s", "delivery.dead_letter_retention": "0s"}, environ())
+	require.Error(t, err)
+	for _, want := range []string{"delivery.workers", "delivery.provider_timeout", "delivery.dead_letter_retention"} {
+		assert.Contains(t, err.Error(), want)
+	}
 }
 
 func TestValidationReportsEveryProblem(t *testing.T) {
