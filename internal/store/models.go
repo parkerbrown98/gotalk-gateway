@@ -42,6 +42,7 @@ type DeliveryLog struct {
 	LatencyMs      *int32
 	CreatedAt      time.Time
 	UpdatedAt      time.Time
+	ErrorDetail    *string
 }
 
 type Device struct {
@@ -90,6 +91,14 @@ type InstanceKey struct {
 	CreatedAt   time.Time
 	Recovery    bool
 	ExpiresAt   *time.Time
+}
+
+type PushIdempotency struct {
+	InstanceID  string
+	Key         string
+	Fingerprint []byte
+	Response    []byte
+	CreatedAt   time.Time
 }
 
 type UsageCounter struct {

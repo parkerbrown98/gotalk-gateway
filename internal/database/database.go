@@ -14,7 +14,13 @@ import (
 	"github.com/jackc/pgx/v5/stdlib"
 	"github.com/pressly/goose/v3"
 	"github.com/pressly/goose/v3/lock"
+	"github.com/riverqueue/river/riverdriver/riverpgxv5"
+	"github.com/riverqueue/river/rivermigrate"
 )
+
+// riverMigrationLock is the advisory lock key held while river's schema is migrated, so
+// replicas that boot together do not race.
+const riverMigrationLock = 0x67746b7276 // "gtkrv"
 
 //go:embed migrations/*.sql
 var migrationsFS embed.FS
@@ -80,7 +86,8 @@ func newProvider(pool *pgxpool.Pool) (*goose.Provider, error) {
 		goose.WithSessionLocker(locker))
 }
 
-// Migrate applies all pending migrations.
+// Migrate applies all pending migrations: the gateway's own, then the schema of the river
+// job queue that delivers pushes.
 func Migrate(ctx context.Context, pool *pgxpool.Pool, log *slog.Logger) error {
 	p, err := newProvider(pool)
 	if err != nil {
@@ -92,6 +99,36 @@ func Migrate(ctx context.Context, pool *pgxpool.Pool, log *slog.Logger) error {
 	}
 	for _, r := range results {
 		log.Info("applied migration", "version", r.Source.Version, "file", r.Source.Path, "duration", r.Duration.String())
+	}
+	if err := migrateQueue(ctx, pool, log); err != nil {
+		return fmt.Errorf("applying queue migrations: %w", err)
+	}
+	return nil
+}
+
+func migrateQueue(ctx context.Context, pool *pgxpool.Pool, log *slog.Logger) error {
+	m, err := rivermigrate.New(riverpgxv5.New(pool), &rivermigrate.Config{Logger: slog.New(slog.DiscardHandler)})
+	if err != nil {
+		return err
+	}
+	// River runs some migrations outside a transaction, so the lock is held by a session.
+	conn, err := pool.Acquire(ctx)
+	if err != nil {
+		return err
+	}
+	defer conn.Release()
+	if _, err := conn.Exec(ctx, "SELECT pg_advisory_lock($1)", riverMigrationLock); err != nil {
+		return err
+	}
+	defer func() {
+		_, _ = conn.Exec(context.WithoutCancel(ctx), "SELECT pg_advisory_unlock($1)", riverMigrationLock)
+	}()
+	res, err := m.Migrate(ctx, rivermigrate.DirectionUp, nil)
+	if err != nil {
+		return err
+	}
+	for _, v := range res.Versions {
+		log.Info("applied queue migration", "version", v.Version, "name", v.Name, "duration", v.Duration.String())
 	}
 	return nil
 }

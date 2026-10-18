@@ -54,7 +54,7 @@ func TestMigrateCreatesSchemaV1(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, st.Latest, st.Current)
 
-	for _, table := range []string{"apps", "instances", "instance_keys", "devices", "usage_counters", "delivery_log", "blocklist"} {
+	for _, table := range []string{"apps", "instances", "instance_keys", "devices", "usage_counters", "delivery_log", "blocklist", "push_idempotency", "river_job"} {
 		var exists bool
 		require.NoError(t, pool.QueryRow(ctx, "SELECT to_regclass('public.' || $1) IS NOT NULL", table).Scan(&exists))
 		assert.True(t, exists, table)
