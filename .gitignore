@@ -5,3 +5,5 @@
 coverage.out
 .env
 *.local.yaml
+# Throwaway end-to-end test credentials (internal/e2e/gen)
+/.e2e/

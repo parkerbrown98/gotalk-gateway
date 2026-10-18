@@ -20,6 +20,7 @@ test-unit: ## Run tests without PostgreSQL containers
 	go test -short ./...
 
 e2e-up: ## Start the stack in development mode for the end-to-end test
+	go run ./internal/e2e/gen .e2e
 	docker compose -f docker-compose.yml -f docker-compose.e2e.yml up -d --build --wait
 
 e2e: e2e-up ## Run the end-to-end test against the e2e stack

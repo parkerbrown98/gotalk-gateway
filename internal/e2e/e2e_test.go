@@ -1,21 +1,26 @@
 //go:build e2e
 
 // Package e2e drives a running gateway through instance registration, domain verification,
-// signed requests, key rotation, recovery, device subscriptions and deregistration. The test plays the instance:
-// it serves the well-known document the gateway verifies against. Start the stack with
-// docker-compose.e2e.yml and run `make e2e`.
+// signed requests, key rotation, recovery, device subscriptions, push delivery and
+// deregistration. The test plays the instance, serving the well-known document the gateway
+// verifies against, and plays APNs and FCM with the fakes in providertest. Start the stack
+// with docker-compose.e2e.yml and run `make e2e`.
 package e2e
 
 import (
 	"bytes"
 	"crypto/ed25519"
+	"crypto/rsa"
+	"crypto/x509"
 	"encoding/base64"
 	"encoding/json"
+	"encoding/pem"
 	"fmt"
 	"io"
 	"net"
 	"net/http"
 	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
@@ -24,6 +29,8 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/parkerbrown98/gotalk-gateway/internal/providers/apns"
+	"github.com/parkerbrown98/gotalk-gateway/internal/providers/providertest"
 	"github.com/parkerbrown98/gotalk-gateway/internal/signing"
 )
 
@@ -39,6 +46,13 @@ var (
 	// origin is how the gateway reaches the well-known server below.
 	origin     = env("E2E_ORIGIN", "http://host.docker.internal:18080")
 	listenAddr = env("E2E_LISTEN", ":18080")
+	apnsAddr   = env("E2E_APNS_LISTEN", ":18081")
+	fcmAddr    = env("E2E_FCM_LISTEN", ":18082")
+	// secrets holds the credentials internal/e2e/gen wrote for the gateway.
+	secrets = env("E2E_SECRETS", filepath.Join("..", "..", ".e2e"))
+
+	fakeAPNs = providertest.NewAPNs()
+	fakeFCM  = providertest.NewFCM("e2e-project")
 )
 
 // wellKnown serves the stand-in instance's /.well-known/gotalk-instance.
@@ -69,9 +83,50 @@ func TestMain(m *testing.M) {
 	}
 	srv := &http.Server{Handler: site, ReadHeaderTimeout: 5 * time.Second}
 	go func() { _ = srv.Serve(ln) }()
+	if err := startFakes(); err != nil {
+		fmt.Fprintln(os.Stderr, "starting the provider fakes:", err)
+		os.Exit(1)
+	}
 	code := m.Run()
 	_ = srv.Close()
 	os.Exit(code)
+}
+
+// startFakes serves APNs and FCM fakes that check the gateway signs with the generated keys.
+func startFakes() error {
+	p8, err := os.ReadFile(filepath.Join(secrets, "apns.p8"))
+	if err != nil {
+		return fmt.Errorf("%w (run go run ./internal/e2e/gen .e2e)", err)
+	}
+	apnsKey, err := apns.ParseKey(p8)
+	if err != nil {
+		return err
+	}
+	fakeAPNs.Key, fakeAPNs.TeamID, fakeAPNs.KeyID, fakeAPNs.Topic = &apnsKey.PublicKey, "TEAM123456", "KEY1234567", "app.example.gotalk"
+	raw, err := os.ReadFile(filepath.Join(secrets, "fcm.json"))
+	if err != nil {
+		return err
+	}
+	var sa struct {
+		PrivateKey string `json:"private_key"`
+	}
+	if err := json.Unmarshal(raw, &sa); err != nil {
+		return err
+	}
+	block, _ := pem.Decode([]byte(sa.PrivateKey))
+	if block == nil {
+		return fmt.Errorf("fcm.json has no PEM private key")
+	}
+	k, err := x509.ParsePKCS8PrivateKey(block.Bytes)
+	if err != nil {
+		return err
+	}
+	fakeFCM.Key = &k.(*rsa.PrivateKey).PublicKey
+	if _, _, err := providertest.Serve(apnsAddr, fakeAPNs); err != nil {
+		return err
+	}
+	_, _, err = providertest.Serve(fcmAddr, fakeFCM)
+	return err
 }
 
 type key struct {
@@ -224,4 +279,88 @@ func TestInstanceFlow(t *testing.T) {
 	expect(t, do(t, "PUT", "/v1/devices/"+sub.body["subscription_id"].(string), map[string]any{}, nil,
 		bearer(sub.body["subscription_secret"].(string))), 404, "subscription_not_found")
 	expect(t, do(t, "POST", "/v1/devices", device, nil), 404, "instance_not_found")
+}
+
+// waitPush polls the push's status until it is no longer queued.
+func waitPush(t *testing.T, pushID string, k *key) result {
+	t.Helper()
+	deadline := time.Now().Add(30 * time.Second)
+	for {
+		r := expect(t, do(t, "GET", "/v1/pushes/"+pushID, nil, k), 200, "")
+		if r.body["status"] != "queued" || time.Now().After(deadline) {
+			return r
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+}
+
+func TestPushFlow(t *testing.T) {
+	fakeAPNs.Reset()
+	fakeFCM.Reset()
+	k := newKey(t)
+	publish(t)
+	reg := expect(t, do(t, "POST", "/v1/instances", map[string]any{
+		"origin": origin, "public_key": k.pub(), "contact_email": "ops@instance.example",
+	}, nil), 201, "")
+	id := reg.body["instance_id"].(string)
+	k.id = reg.body["key_id"].(string)
+	publish(t, k)
+	expect(t, do(t, "POST", "/v1/instances/"+id+"/verify", nil, k), 200, "")
+	t.Cleanup(func() { do(t, "DELETE", "/v1/instances/"+id, nil, k) })
+
+	iosToken := strings.Repeat("ef", 32)
+	ios := expect(t, do(t, "POST", "/v1/devices", map[string]any{
+		"app_id": "gotalk", "instance_origin": origin, "platform": "ios", "token": iosToken, "apns_environment": "sandbox",
+	}, nil), 201, "").body["subscription_id"].(string)
+	fcmToken := "e2e:" + strings.Repeat("Ab-_", 30)
+	android := expect(t, do(t, "POST", "/v1/devices", map[string]any{
+		"app_id": "gotalk", "instance_origin": origin, "platform": "android", "token": fcmToken,
+	}, nil), 201, "").body["subscription_id"].(string)
+
+	// An encrypted push reaches APNs with the gateway's signed provider token.
+	body := base64.RawURLEncoding.EncodeToString(bytes.Repeat([]byte{7}, 200))
+	acc := expect(t, do(t, "POST", "/v1/push", map[string]any{
+		"subscription_id": ios, "mode": "encrypted", "notification_id": "ntf_e2e_1", "payload": body, "urgency": "high",
+	}, k), 202, "")
+	st := waitPush(t, acc.body["push_id"].(string), k)
+	assert.Equal(t, "sent", st.body["status"], fmt.Sprint(st.body))
+	reqs := fakeAPNs.Requests(iosToken)
+	require.Len(t, reqs, 1)
+	assert.Equal(t, 2, reqs[0].Proto)
+	assert.Equal(t, "10", reqs[0].Header.Get("apns-priority"))
+	assert.Equal(t, body, reqs[0].Body["gt"].(map[string]any)["body"])
+
+	// A transient FCM failure is retried, with an OAuth token from the service account.
+	fakeFCM.Respond(fcmToken, providertest.Response{Status: 503, Reason: "UNAVAILABLE"})
+	acc = expect(t, do(t, "POST", "/v1/push", map[string]any{
+		"subscription_id": android, "mode": "id_only", "notification_id": "ntf_e2e_2", "ttl": 300,
+	}, k), 202, "")
+	st = waitPush(t, acc.body["push_id"].(string), k)
+	assert.Equal(t, "sent", st.body["status"], fmt.Sprint(st.body))
+	assert.Equal(t, 2.0, st.body["attempts"])
+	freqs := fakeFCM.Requests(fcmToken)
+	require.Len(t, freqs, 2)
+	assert.Equal(t, origin, freqs[1].Body["message"].(map[string]any)["data"].(map[string]any)["gt_instance"])
+	// The gateway caches its OAuth token, so a previous run may have fetched it.
+	assert.True(t, strings.HasPrefix(freqs[1].Header.Get("Authorization"), "Bearer fake-access-"))
+
+	// A dead token marks the subscription gone, and the next push says so.
+	fakeAPNs.Respond(iosToken, providertest.Response{Status: 410, Reason: "Unregistered"})
+	batch := expect(t, do(t, "POST", "/v1/push/batch", map[string]any{"pushes": []any{
+		map[string]any{"subscription_id": ios, "mode": "id_only", "notification_id": "ntf_e2e_3"},
+		map[string]any{"subscription_id": "sub_doesnotexist", "mode": "id_only", "notification_id": "ntf_e2e_4"},
+	}}, k), 202, "")
+	results := batch.body["results"].([]any)
+	assert.Equal(t, "rejected", results[1].(map[string]any)["status"])
+	st = waitPush(t, results[0].(map[string]any)["push_id"].(string), k)
+	assert.Equal(t, "gone", st.body["status"], fmt.Sprint(st.body))
+	assert.Equal(t, "subscription_gone", st.body["error"].(map[string]any)["code"])
+	expect(t, do(t, "POST", "/v1/push", map[string]any{
+		"subscription_id": ios, "mode": "id_only", "notification_id": "ntf_e2e_5",
+	}, k), 410, "subscription_gone")
+
+	inst := expect(t, do(t, "GET", "/v1/instances/"+id, nil, k), 200, "")
+	usage := inst.body["usage"].(map[string]any)
+	assert.Equal(t, 3.0, usage["pushes_accepted"])
+	assert.Equal(t, 1.0, usage["pushes_failed"])
 }
