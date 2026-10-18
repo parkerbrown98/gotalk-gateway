@@ -370,6 +370,12 @@ paths:
       responses:
         "202":
           description: Batch processed.
+          headers:
+            Idempotency-Replayed:
+              description: "`true` when the response replays an earlier request with the same key."
+              schema:
+                type: string
+                enum: ["true"]
           content:
             application/json:
               schema:
@@ -445,7 +451,9 @@ components:
       name: Idempotency-Key
       in: header
       required: false
-      description: Repeats within 24 hours return the original response.
+      description: |
+        Repeats within 24 hours return the original response. Reusing a key for a different request fails with
+        `invalid_request`. Only `202` responses are remembered.
       schema:
         type: string
         minLength: 1
@@ -1017,6 +1025,7 @@ components:
           type: string
           format: date-time
         error:
+          description: Why the push failed, expired or found the subscription gone; `null` while queued and when sent.
           oneOf:
             - $ref: "#/components/schemas/ItemError"
             - type: "null"

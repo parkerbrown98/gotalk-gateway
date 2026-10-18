@@ -152,8 +152,10 @@ body or switch to `id_only`; they never split a notification into several pushes
 }
 ```
 
-Headers: `apns-push-type: alert`, `apns-priority` from urgency (10, 5 or 1), `apns-expiration` from TTL,
-`apns-collapse-id` from `collapse_key`. For `id_only`, `gt` is `{ "v": 1, "sub": "...", "mode": "id_only",
+Headers: `apns-push-type: alert`, `apns-priority` from urgency (10, 5 or 1), `apns-expiration` from TTL (the
+acceptance time plus TTL, or `0` for a TTL of 0), `apns-collapse-id` from `collapse_key`. Every push is a visible
+alert with `mutable-content`, including low-urgency ones: background (`content-available`) pushes do not run the
+Notification Service Extension, and iOS throttles them, so the gateway does not send them. For `id_only`, `gt` is `{ "v": 1, "sub": "...", "mode": "id_only",
 "instance": "...", "notification_id": "..." }`. The app bundle ships the localized string `GT_NEW_NOTIFICATION`
 ("New notification"). It is the only text the user sees if the extension fails or the payload cannot be decrypted.
 Badge counts come from the decrypted payload, set by the extension.
@@ -170,7 +172,10 @@ Badge counts come from the decrypted payload, set by the extension.
 }
 ```
 
-FCM data values are strings, so `gt_v` is a string. Collapsed messages replace each other on FCM's servers.
+FCM data values are strings, so `gt_v` is a string. Collapsed messages replace each other on FCM's servers. For
+`id_only`, `data` is `{ "gt_v": "1", "gt_sub": "...", "gt_mode": "id_only", "gt_instance": "...",
+"gt_notification_id": "..." }`. `android.ttl` is the time left of the push's TTL when it is sent, so retries do not
+extend it.
 
 **Web Push:** `POST {endpoint}` with the raw body, `Content-Encoding: aes128gcm`, `TTL`, `Urgency`, `Topic`
 (from `collapse_key`) and a VAPID `Authorization` header (`vapid t=<JWT>, k=<public key>`, RFC 8292) signed with the

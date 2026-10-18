@@ -290,7 +290,7 @@ Deliverables:
   - A repeated `DELETE` returns `404`, which callers treat as success, because unknown, foreign and
     wrong-secret subscriptions must look the same.
 
-### Phase 4 — Delivery pipeline and mobile providers ⬜
+### Phase 4 — Delivery pipeline and mobile providers ✅
 
 - `POST /v1/push` and `POST /v1/push/batch` (up to 100 targets): signed by the instance, validated against
   subscription ownership, answered with `202` and per-target results.
@@ -303,6 +303,71 @@ Deliverables:
 - Provider fakes and end-to-end tests that cover retry, backoff and the dead-token path.
 
 Done when a signed push request reaches a fake APNs and FCM and the failure paths behave as specified.
+
+Deliverables:
+
+- ✅ `POST /v1/push` (16 KiB body) and `POST /v1/push/batch` (1 MiB, 1 to 100 entries) in
+  [push.go](../internal/api/push.go), signed by an active key of an *active* instance (a suspended instance can still
+  manage keys, but gets `instance_not_verified` here). Entries are parsed strictly and one by one, so a batch reports
+  each bad entry in its result:
+  - ownership: another instance's subscription is `404 subscription_not_found`, exactly like a missing one;
+  - `410 subscription_gone`, `413 payload_too_large` (over 2,200 decoded bytes), `422 invalid_request` with field
+    errors, and `id_only` refused for web;
+  - `503 provider_unavailable` when the gateway has no credentials for the subscription's app and platform, which
+    is how web subscriptions are answered until Phase 5.
+- ✅ `GET /v1/pushes/{push_id}`: the delivery-log entry (status, attempts, timestamps, and `error` with the
+  provider's short reason once final). Another instance's push is `404 push_not_found`.
+- ✅ `Idempotency-Key`: the `202` response is kept for 24 hours per instance and replayed with
+  `Idempotency-Replayed: true`. Reusing a key for another request is `422`. A rejected single push is not
+  remembered. Concurrent duplicates queue once.
+- ✅ Queue: [river](https://riverqueue.com) on PostgreSQL. The delivery-log rows, the jobs and the usage counters
+  are written in one transaction, so a `202` push is always queued. River's schema is migrated by
+  `database.Migrate` under an advisory lock. Urgency maps to job priority. `delivery.workers` (default 50) sets the
+  worker pool per replica; `0` makes an API-only replica. Shutdown lets in-flight deliveries finish.
+- ✅ Retries ([worker.go](../internal/push/worker.go)) follow the protocol: up to 5 attempts, a 1 s base doubled each
+  time with equal jitter, the provider's `Retry-After` honored, and never past the TTL (a TTL of 0 gets exactly one
+  attempt). Retries are river snoozes counted in the delivery log, so a throttling provider cannot stretch them.
+  Out of attempts, a push is dead-lettered: `failed` with `provider_unavailable`, and its job is kept `cancelled`,
+  with every error, for `delivery.dead_letter_retention` (24 h). Unexpected errors (a database outage) use river's
+  own retries and end as `failed`/`internal_error`.
+- ✅ Each attempt reads the subscription's current token. A dead-token report uses Phase 3's compare-and-set
+  `MarkGone`; when the client replaced the token meanwhile, the report is ignored and the push is retried at once
+  with the new token. Deleted or already gone subscriptions finish without a provider call.
+- ✅ APNs ([apns.go](../internal/providers/apns/apns.go)): HTTP/2 only, pooled with ping health checks, ES256 provider
+  tokens (`golang-jwt`) reused for 50 minutes and replaced when APNs reports them expired, per-subscription
+  production or sandbox endpoint. The payload and headers are those of [payload.md](payload.md): an alert with
+  `mutable-content` and the `GT_NEW_NOTIFICATION` fallback, priority 10/5/1, `apns-expiration`, `apns-collapse-id`.
+- ✅ FCM ([fcm.go](../internal/providers/fcm/fcm.go)): HTTP v1 with a service account's OAuth token
+  (`golang.org/x/oauth2/google`), cached until shortly before expiry and replaced when FCM refuses it; a data-only
+  message with `HIGH`/`NORMAL` priority, the remaining TTL and `collapse_key`.
+- ✅ Error mapping to three outcomes: *gone* (APNs `410`, `BadDeviceToken`, `DeviceTokenNotForTopic`; FCM
+  `UNREGISTERED`, `SENDER_ID_MISMATCH`, an invalid `message.token`), *rejected* (other `4xx`, reported as
+  `provider_rejected` and never retried) and *retry* (`429`, `5xx`, timeouts, and the gateway's own credentials
+  being refused).
+- ✅ Provider credentials in the app config (`ios.apns`, `android.fcm`, with `*_file` variants for mounted secrets),
+  validated at startup and never written to the database; see [configuration.md](configuration.md#apps).
+- ✅ Delivery log: IDs, status, attempts, latency and the provider's short reason, never content, pruned after 72
+  hours with the idempotency keys. Completed queue jobs, which hold the ciphertext, are deleted after a minute.
+  Usage counters record accepted, rejected, sent and failed pushes per UTC day, as shown on the instance resource.
+- ✅ Metrics: `gotalk_gateway_push_accepted_total`, `push_rejected_total{code}`, `push_finished_total{status}`,
+  `push_delivery_latency_seconds`, `push_dead_lettered_total`, `provider_requests_total{provider,result}` and
+  `provider_request_duration_seconds{provider}`.
+- ✅ Tests:
+  - provider clients against the fakes in [providertest](../internal/providers/providertest/providertest.go), which
+    verify the JWT and OAuth assertion signatures (payloads, headers, token refresh, error mapping);
+  - every worker branch, deterministically (backoff bounds, `Retry-After`, exhaustion, expiry, TTL 0, dead tokens,
+    a stale dead-token report, rejections, removed subscriptions, deleted instances);
+  - the API through the real queue to the fakes: delivery, retries, dead-lettering, dead tokens on APNs and FCM,
+    validation, cross-instance misuse, batches and idempotency.
+
+  The end-to-end test (`make e2e`, also in CI) runs the container against fake APNs and FCM servers with
+  throwaway keys from `internal/e2e/gen`, covering delivery, a retry and the dead-token path.
+- Not in this phase: push quotas (50,000 per day per instance, 120 per hour per subscription, and counting each
+  batch entry against the signed-request limit) stay with the other quotas in Phase 8. Milestone A is unmetered.
+- 🟨 Protocol clarifications for review: `503 provider_unavailable` for platforms without credentials; idempotency
+  rules (per instance and request, `202` only); the delivery error semantics in "Push status"; the FCM `id_only`
+  data keys; and no background (`content-available`) pushes, since they do not run the Notification Service
+  Extension. Badge counts stay in the encrypted payload, set by the extension.
 
 ### Phase 5 — Web Push ⬜
 

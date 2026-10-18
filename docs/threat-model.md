@@ -50,6 +50,10 @@ The collapse key is a metadata hint chosen by the instance. Instances should der
 conversation, never from content or names. Providers additionally see the device token and the encrypted body, and
 can see message timing.
 
+The gateway stores the encrypted body only in its delivery queue: until the push is delivered, plus a minute, or for
+`delivery.dead_letter_retention` (default 24 hours) when its retries run out. The delivery log keeps IDs, status,
+attempts, latency and the provider's short failure reason for 72 hours, never the body.
+
 ## Threats and mitigations
 
 Format: threat, then what stops it or limits it. "Test" names where Phase 2 to 8 should prove it.
@@ -60,7 +64,7 @@ An instance operator abuses the gateway or the users registered for it.
 
 | Threat | Mitigation |
 |---|---|
-| Pushes to devices registered for other instances | Every subscription is bound to one origin. A signed push whose key belongs to another instance gets `subscription_not_found`. *Test: cross-instance push is rejected (Phase 4); cross-instance delete is rejected (`TestDeviceCrossInstanceMisuse`).* |
+| Pushes to devices registered for other instances | Every subscription is bound to one origin. A signed push whose key belongs to another instance gets `subscription_not_found`. *Test: cross-instance push and push-status reads are rejected (`TestPushCrossInstance`); cross-instance delete is rejected (`TestDeviceCrossInstanceMisuse`).* |
 | Spam to its own subscribers | Per-instance daily quota, per-device hourly cap, urgency and TTL limits, automatic temporary blocks and a manual blocklist with a visible reason. |
 | Impersonating another app or sender in the notification text | The client composes the notification from structured fields and always shows the instance name; the undecrypted fallback is gateway-controlled text. |
 | Registering as someone else's origin | Domain verification through the origin's own well-known document. Squatted pending registrations never verify and expire. A recovery key for someone else's verified origin can only call `verify`, so it reveals nothing about the instance. *Test: `TestRecovery`, `TestPrune`.* |
@@ -124,6 +128,8 @@ content. Clients de-duplicate on `notification_id` and never assume delivery.
 | Request replay | Nonce cache keyed by key ID, 600 second retention against a 300 second window. |
 | Clock skew abuse | Window is symmetric ±300 seconds; `Date` is returned on `stale_timestamp` for debugging. |
 | Provider replay of an old push | Client de-duplication on `notification_id`; TTL bounds how long a provider holds a push. |
+| Instance retries causing duplicate pushes | `Idempotency-Key` replays the original response for 24 hours. *Test: `TestPushIdempotency`.* |
+| A late dead-token report killing a refreshed subscription | Marking a subscription gone is a compare-and-set on the token the push was sent to. *Test: `TestDeliverIgnoresDeadTokenReportForReplacedToken`.* |
 | Resource exhaustion | Body size limits, a 100 entry batch limit, per-instance and per-IP rate limits, a bounded queue per instance, and request timeouts. |
 | Slow verification fetches used for amplification | 5 second timeout, one fetch per pending registration and per 24 hour verification, global concurrency cap. |
 | Enumeration of instances | `GET /v1/instances/{id}` requires a signature from that instance; discovery is the only public instance-independent data. |

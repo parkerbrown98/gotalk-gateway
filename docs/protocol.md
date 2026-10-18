@@ -447,9 +447,19 @@ Response `202 Accepted`:
 Failures before queueing use an HTTP error ([Errors](#errors)): `404 subscription_not_found`,
 `410 subscription_gone`, `413 payload_too_large`, `422 invalid_request`, `429 rate_limited` or `quota_exceeded`.
 
-**Idempotency.** An instance MAY send `Idempotency-Key` (1 to 64 characters). A repeat of the same key from the
-same instance within 24 hours returns the original response with `Idempotency-Replayed: true` instead of queueing
-a second push. Without the header, retries can duplicate; clients de-duplicate by notification ID.
+Failures before queueing also include `503 provider_unavailable` when this gateway has no provider credentials
+for the subscription's app and platform (for example Web Push before it is configured).
+
+**Idempotency.** An instance MAY send `Idempotency-Key` (1 to 64 characters). A repeat of the same key
+from the same instance within 24 hours returns the original response with `Idempotency-Replayed: true` instead of
+queueing a second push. Without the header, retries can duplicate; clients de-duplicate by notification ID.
+
+- Keys are scoped to the instance and to the request: reusing a key for a different body or endpoint within 24
+  hours fails with `422 invalid_request`.
+- Only a `202` is remembered. A single push that failed before queueing (for example `410 subscription_gone`) can be
+  retried with the same key once the cause is fixed. A batch is always `202`, so its whole result, rejected entries
+  included, is replayed.
+- Two concurrent requests with the same key queue the pushes once; both get the same response.
 
 ### Batch push
 
@@ -468,7 +478,8 @@ result per entry, in order:
 ```
 
 A malformed envelope (not valid JSON, more than 100 entries, bad signature) fails the whole request with the
-usual error. Per-entry validation failures are reported in `results` and do not stop other entries. Rate limits
+usual error. Per-entry validation failures are reported in `results` and do not stop other entries. An entry's
+`error.message` lists its field problems; `subscription_id` is empty when the entry did not name one. Rate limits
 count each entry. When the instance's quota runs out mid-batch, remaining entries are rejected with
 `quota_exceeded` and `status` is `rejected`.
 
@@ -498,9 +509,21 @@ Entries are kept for 72 hours and contain no content.
 | `expired` | The TTL ran out before the provider accepted it. |
 | `gone` | The provider said the token is dead; the subscription is now `gone`. |
 
-Delivery to providers retries transient failures (provider `5xx`, throttling, timeouts) with exponential backoff
-and jitter (1 s base, factor 2, up to 5 attempts or the TTL, whichever is first). `Retry-After` from a provider is
-honored.
+Delivery to providers retries transient failures (provider `5xx`, throttling, timeouts, and the gateway's own
+provider credentials being refused) with exponential backoff and jitter (1 s base, factor 2, up to 5 attempts or the
+TTL, whichever is first). `Retry-After` from a provider is honored. A push with `ttl: 0` gets exactly one attempt.
+
+- `error` is `null` until the push is final, and for `sent`. Its `message` names the provider's reason where there
+  is one, for example "The device token is no longer valid; delete the subscription (APNs Unregistered)."
+- A push whose retries run out is `failed` with `provider_unavailable`. One whose TTL runs out first is `expired`,
+  with the last failure as its `error`, or `null` if it was never attempted.
+- A provider refusal that is not about the token (bad topic, invalid collapse ID, payload rejected) is `failed`
+  with `provider_rejected` and is not retried.
+- A push to a subscription that was deleted before delivery is `failed` with `subscription_gone`; one that was
+  already `gone` is `gone`.
+- Each attempt reads the subscription's current token, so a token refreshed while a push is queued is used. A
+  dead-token report for a token the client has since replaced is ignored, and the push is retried at once with the
+  new token.
 
 ## Errors
 
@@ -544,7 +567,7 @@ Errors use RFC 9457 `application/problem+json` with an extra `code`:
 | `unsupported_media_type` | 415 | Body is not `application/json`. |
 | `rate_limited` | 429 | Rate limit hit. `Retry-After` is set. |
 | `quota_exceeded` | 429 | Daily or plan quota used up. `Retry-After` is set to the reset. |
-| `provider_unavailable` | 503 | The gateway could not enqueue (queue or database down). Retry with backoff. |
+| `provider_unavailable` | 503 | The gateway could not enqueue (queue or database down), or has no provider credentials for the subscription's app and platform. Retry with backoff. |
 | `internal_error` | 500 | Unexpected failure. `request_id` helps the operator. |
 
 Failures reported on a push's `error.code` after the fact are limited to: `subscription_gone`,
