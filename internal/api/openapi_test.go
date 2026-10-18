@@ -64,6 +64,7 @@ func TestOpenAPIMatchesContract(t *testing.T) {
 		"RegisterInstanceRequest", "RegisterInstanceResponse", "Instance", "InstanceKey", "AddKeyRequest",
 		"RegisterDeviceRequest", "DeviceCommon", "RegisterIosDevice", "RegisterAndroidDevice", "RegisterWebDevice",
 		"RegisterDeviceResponse", "RefreshDeviceRequest", "RefreshDeviceResponse",
+		"PushRequest", "PushAccepted", "PushBatchRequest", "PushBatchResponse", "PushStatus", "ItemError",
 	}, "implemented schemas are compared with the contract")
 }
 

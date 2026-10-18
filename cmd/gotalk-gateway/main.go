@@ -30,6 +30,7 @@ import (
 	"github.com/parkerbrown98/gotalk-gateway/internal/devices"
 	"github.com/parkerbrown98/gotalk-gateway/internal/instances"
 	"github.com/parkerbrown98/gotalk-gateway/internal/nonce"
+	"github.com/parkerbrown98/gotalk-gateway/internal/push"
 	"github.com/parkerbrown98/gotalk-gateway/internal/ratelimit"
 	"github.com/parkerbrown98/gotalk-gateway/internal/wellknown"
 )
@@ -333,20 +334,46 @@ func serve(ctx context.Context, cfg *config.Config, log *slog.Logger) error {
 		return err
 	}
 
+	metrics := api.NewMetrics(version)
+	providerRegistry, err := push.BuildProviders(cfg.Apps)
+	if err != nil {
+		return err
+	}
+	log.Info("push providers configured", "count", providerRegistry.Len())
+	pushMetrics := push.NewMetrics(metrics.Registry)
+	worker := push.NewWorker(pool, devicesSvc, providerRegistry, push.WorkerOptions{
+		ProviderTimeout: cfg.Delivery.ProviderTimeout, Metrics: pushMetrics, Logger: log,
+	})
+	queue, err := push.NewQueue(pool, worker, push.QueueOptions{
+		Workers: cfg.Delivery.Workers, DeadLetterRetention: cfg.Delivery.DeadLetterRetention, Logger: log,
+	})
+	if err != nil {
+		return fmt.Errorf("creating the push queue: %w", err)
+	}
+	pushSvc := push.NewService(pool, queue, providerRegistry, push.Options{Metrics: pushMetrics, Logger: log})
+
 	bgCtx, stopBackground := context.WithCancel(context.Background())
 	var background sync.WaitGroup
 	background.Go(func() { bl.Run(bgCtx) })
 	background.Go(func() { svc.RunMaintenance(bgCtx) })
 	background.Go(func() { devicesSvc.RunMaintenance(bgCtx) })
+	background.Go(func() { pushSvc.RunMaintenance(bgCtx) })
 	defer func() {
 		stopBackground()
 		background.Wait()
 	}()
+	if cfg.Delivery.Workers > 0 {
+		if err := queue.Start(bgCtx); err != nil {
+			return fmt.Errorf("starting push delivery: %w", err)
+		}
+		log.Info("push delivery started", "workers", cfg.Delivery.Workers)
+	} else {
+		log.Warn("delivery.workers is 0: this replica queues pushes but does not deliver them")
+	}
 
-	metrics := api.NewMetrics(version)
 	handler := api.New(api.Deps{
 		Config: cfg, Logger: log, Version: version, Apps: registry, Checks: checks, Metrics: metrics,
-		Instances: svc, Devices: devicesSvc, Nonces: nonce.New(rdb), Limiter: limiter, Blocklist: bl,
+		Instances: svc, Devices: devicesSvc, Push: pushSvc, Nonces: nonce.New(rdb), Limiter: limiter, Blocklist: bl,
 	})
 	servers := []*http.Server{newHTTPServer(cfg.Server.Addr, handler, log)}
 	if cfg.Metrics.Enabled && cfg.Metrics.Addr != "" {
@@ -390,6 +417,15 @@ func serve(ctx context.Context, cfg *config.Config, log *slog.Logger) error {
 	for _, srv := range servers {
 		if err := srv.Shutdown(shutdownCtx); err != nil {
 			shutdownErr = errors.Join(shutdownErr, fmt.Errorf("graceful shutdown of %s: %w", srv.Addr, err))
+		}
+	}
+	if cfg.Delivery.Workers > 0 {
+		// Let in-flight deliveries finish; queued pushes wait for the next replica.
+		if err := queue.Stop(shutdownCtx); err != nil {
+			log.Warn("push deliveries did not finish in time; cancelling them", "error", err.Error())
+			cancelCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			_ = queue.StopAndCancel(cancelCtx)
+			cancel()
 		}
 	}
 	if shutdownErr != nil {

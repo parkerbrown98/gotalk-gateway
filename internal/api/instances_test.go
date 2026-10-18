@@ -18,8 +18,10 @@ import (
 	"testing"
 	"time"
 
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/redis/go-redis/v9"
+	"github.com/riverqueue/river"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
@@ -30,6 +32,11 @@ import (
 	"github.com/parkerbrown98/gotalk-gateway/internal/instances"
 	"github.com/parkerbrown98/gotalk-gateway/internal/nonce"
 	"github.com/parkerbrown98/gotalk-gateway/internal/problem"
+	"github.com/parkerbrown98/gotalk-gateway/internal/providers"
+	"github.com/parkerbrown98/gotalk-gateway/internal/providers/apns"
+	"github.com/parkerbrown98/gotalk-gateway/internal/providers/fcm"
+	"github.com/parkerbrown98/gotalk-gateway/internal/providers/providertest"
+	"github.com/parkerbrown98/gotalk-gateway/internal/push"
 	"github.com/parkerbrown98/gotalk-gateway/internal/ratelimit"
 	"github.com/parkerbrown98/gotalk-gateway/internal/signing"
 	"github.com/parkerbrown98/gotalk-gateway/internal/testdb"
@@ -106,7 +113,46 @@ type gw struct {
 	devices *devices.Service
 	origins *fakeOrigins
 	bl      *blocklist.Cache
+	push    *push.Service
+	queue   *river.Client[pgx.Tx]
+	apns    *providertest.APNs
+	fcm     *providertest.FCM
 }
+
+// fakeProviders are APNs and FCM fakes shared by every test gateway (tests do not run in
+// parallel), with clients for the gotalk app: iOS through APNs and Android through FCM. The
+// droid app and web subscriptions have no provider.
+type sharedFakes struct {
+	apns    *providertest.APNs
+	fcm     *providertest.FCM
+	clients map[string]providers.Provider
+}
+
+var fakeProviders = sync.OnceValue(func() sharedFakes {
+	apnsFake, fcmFake := providertest.NewAPNs(), providertest.NewFCM("gotalk-test")
+	apnsURL, _, err := providertest.Serve("127.0.0.1:0", apnsFake)
+	if err != nil {
+		panic(err)
+	}
+	fcmURL, _, err := providertest.Serve("127.0.0.1:0", fcmFake)
+	if err != nil {
+		panic(err)
+	}
+	key, pub := providertest.NewAPNsKey()
+	apnsFake.Key, apnsFake.Topic = pub, "app.example.gotalk"
+	apnsClient, err := apns.New(apns.Config{BundleID: "app.example.gotalk", TeamID: "TEAM123456", KeyID: "KEY1234567",
+		PrivateKey: key, ProductionURL: apnsURL, SandboxURL: apnsURL})
+	if err != nil {
+		panic(err)
+	}
+	sa, rsaPub := providertest.NewServiceAccount("gotalk-test", fcmURL+"/token")
+	fcmFake.Key = rsaPub
+	fcmClient, err := fcm.New(fcm.Config{ServiceAccount: sa, Endpoint: fcmURL})
+	if err != nil {
+		panic(err)
+	}
+	return sharedFakes{apnsFake, fcmFake, map[string]providers.Provider{devices.IOS: apnsClient, devices.Android: fcmClient}}
+})
 
 // testApps are the apps every test gateway serves.
 var testApps = []apps.App{
@@ -119,7 +165,11 @@ type gwOpts struct {
 	rates map[string]string
 	rdb   *redis.Client
 	pool  *pgxpool.Pool
+	// deliver starts push delivery workers.
+	deliver bool
 }
+
+func withDelivery(o *gwOpts) { o.deliver = true }
 
 func newGateway(t *testing.T, opts ...func(*gwOpts)) *gw {
 	t.Helper()
@@ -145,11 +195,38 @@ func newGateway(t *testing.T, opts ...func(*gwOpts)) *gw {
 	})
 	limiter, err := ratelimit.New(o.rdb, o.rates)
 	require.NoError(t, err)
+
+	fakes := fakeProviders()
+	apnsFake, fcmFake := fakes.apns, fakes.fcm
+	apnsFake.Reset()
+	fcmFake.Reset()
+	reg := providers.NewRegistry()
+	for platform, c := range fakes.clients {
+		reg.Set("gotalk", platform, c)
+	}
+	worker := push.NewWorker(o.pool, devicesSvc, reg, push.WorkerOptions{ProviderTimeout: 5 * time.Second, RetryBase: 20 * time.Millisecond, Logger: log})
+	workers := 0
+	if o.deliver {
+		workers = 4
+	}
+	queue, err := push.NewQueue(o.pool, worker, push.QueueOptions{Workers: workers, DeadLetterRetention: time.Hour, Logger: log, PollInterval: 20 * time.Millisecond})
+	require.NoError(t, err)
+	if o.deliver {
+		require.NoError(t, queue.Start(context.Background()))
+		t.Cleanup(func() {
+			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+			defer cancel()
+			_ = queue.Stop(ctx)
+		})
+	}
+	pushSvc := push.NewService(o.pool, queue, reg, push.Options{Logger: log})
+
 	srv := New(Deps{
 		Config: cfg, Logger: log, Version: "test", Apps: registry, Metrics: NewMetrics("test"),
-		Instances: svc, Devices: devicesSvc, Nonces: nonce.New(o.rdb), Limiter: limiter, Blocklist: bl,
+		Instances: svc, Devices: devicesSvc, Push: pushSvc, Nonces: nonce.New(o.rdb), Limiter: limiter, Blocklist: bl,
 	})
-	return &gw{t: t, srv: srv, pool: o.pool, svc: svc, devices: devicesSvc, origins: origins, bl: bl}
+	return &gw{t: t, srv: srv, pool: o.pool, svc: svc, devices: devicesSvc, origins: origins, bl: bl,
+		push: pushSvc, queue: queue, apns: apnsFake, fcm: fcmFake}
 }
 
 type resp struct {

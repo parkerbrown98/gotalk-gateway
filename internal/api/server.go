@@ -24,6 +24,7 @@ import (
 	"github.com/parkerbrown98/gotalk-gateway/internal/nonce"
 	"github.com/parkerbrown98/gotalk-gateway/internal/problem"
 	"github.com/parkerbrown98/gotalk-gateway/internal/protocol"
+	"github.com/parkerbrown98/gotalk-gateway/internal/push"
 	"github.com/parkerbrown98/gotalk-gateway/internal/ratelimit"
 	"github.com/parkerbrown98/gotalk-gateway/internal/signing"
 )
@@ -49,6 +50,7 @@ type Deps struct {
 	Metrics   *Metrics
 	Instances *instances.Service
 	Devices   *devices.Service
+	Push      *push.Service
 	// Nonces defaults to an in-memory store, Limiter to no limits and Blocklist to empty.
 	Nonces    nonce.Store
 	Limiter   *ratelimit.Limiter
@@ -136,6 +138,7 @@ func (s *Server) newAPI(r chi.Router, version string) huma.API {
 	s.registerDiscovery(api)
 	s.registerInstances(api)
 	s.registerDevices(api)
+	s.registerPush(api)
 	return api
 }
 

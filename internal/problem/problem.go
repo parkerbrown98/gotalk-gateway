@@ -24,6 +24,7 @@ const (
 	InvalidToken         = "invalid_token"
 	SubscriptionNotFound = "subscription_not_found"
 	SubscriptionGone     = "subscription_gone"
+	PushNotFound         = "push_not_found"
 	InstanceNotFound     = "instance_not_found"
 	KeyNotFound          = "key_not_found"
 	NotFound             = "not_found"
@@ -32,8 +33,11 @@ const (
 	PayloadTooLarge      = "payload_too_large"
 	UnsupportedMediaType = "unsupported_media_type"
 	RateLimited          = "rate_limited"
+	QuotaExceeded        = "quota_exceeded"
 	InternalError        = "internal_error"
 	ProviderUnavailable  = "provider_unavailable"
+	// ProviderRejected is only reported on a push's delivery status, never as an HTTP error.
+	ProviderRejected = "provider_rejected"
 )
 
 const typeBase = "https://gotalk.app/problems/"

@@ -35,6 +35,9 @@ const (
 	authRead
 	// authManage needs an active key of an active or suspended instance.
 	authManage
+	// authPush needs an active key of an active instance: a suspended instance can still
+	// manage its keys, but not push.
+	authPush
 )
 
 const (
@@ -276,6 +279,8 @@ func (s *Server) authenticate(ctx huma.Context, op *huma.Operation, level authLe
 		return instances.Principal{}, notVerified("The instance is pending domain verification.")
 	case level >= authManage && key.Status != instances.KeyActive:
 		return instances.Principal{}, notVerified("This key is pending verification.")
+	case level >= authPush && key.InstanceStatus != instances.StatusActive:
+		return instances.Principal{}, notVerified("The instance's domain verification has lapsed; it cannot push until it is verified again.")
 	}
 
 	// 8. Rate limits.

@@ -13,8 +13,8 @@ import (
 
 const metricsNamespace = "gotalk_gateway"
 
-// Metrics is the gateway's Prometheus registry. Later phases register delivery and
-// provider metrics on Registry.
+// Metrics is the gateway's Prometheus registry. The push pipeline registers its delivery and
+// provider metrics on Registry (push.NewMetrics).
 type Metrics struct {
 	Registry *prometheus.Registry
 	requests *prometheus.CounterVec
