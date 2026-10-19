@@ -603,19 +603,23 @@ Reviewed against the [backend plan](https://github.com/parkerbrown98/gotalk-serv
 and [client plan](https://github.com/parkerbrown98/gotalk-client/blob/main/docs/client-plan.md). What each side
 must add, which feeds Phases 6 and 7:
 
-**`gotalk-server`**
+**`gotalk-server`** (implemented in its Phase 6; see the server's
+[push notifications guide](https://github.com/parkerbrown98/gotalk-server/blob/main/docs/push.md))
 
-- `/.well-known/gotalk-instance` gains the `push.keys` array shown above. It currently returns `software`,
-  `version`, `instance_url`, `api_base_url`, `api_versions`, `instance_info_url` and `gateway_url`. The last one
-  is the realtime WebSocket gateway, unrelated to this service; the new field is named `push` to avoid the clash.
-- `GET /api/v1/instance` advertises `push: { enabled, gateway_url }`.
-- `PushSubscription` stores `subscription_id`, the user, the platform and the device key material
+- `/.well-known/gotalk-instance` gains the `push.keys` array shown above (plus `push.gateway_url`) while push is on.
+  It also returns `software`, `version`, `instance_url`, `api_base_url`, `api_versions`, `instance_info_url` and
+  `gateway_url`. The last one is the realtime WebSocket gateway, unrelated to this service; the new field is named
+  `push` to avoid the clash.
+- `GET /api/v1/instance` advertises `push: { enabled, available, gateway_url, modes, categories, web_apps }`, where
+  `available` means this gateway verified the instance and `web_apps` carries each app's VAPID public key.
+- `PushSubscription` stores `subscription_id`, the user, the login session, the platform and the device key material
   (`p256dh` public key and `auth` secret). It does not store the platform token.
-- Endpoints for a client to add, list and remove its subscriptions. Removing one SHOULD also call
-  `DELETE /v1/devices/{id}` on the gateway.
-- A signed gateway client, an RFC 8291 encryptor, and a job that turns notifications into pushes.
+- `POST`, `GET /api/v1/users/@me/push-subscriptions` and `DELETE …/{id}` let a client add, list and remove its
+  subscriptions. Removing the last account's subscription for a device calls `DELETE /v1/devices/{id}` on the
+  gateway; signing the session out stops its pushes.
+- A signed gateway client, an RFC 8291 encryptor, and an outbox job that turns new notifications into batched pushes.
 - Notification types that become pushes follow the server's notification types (`mention`, `reply`,
-  `topic_reply`, `direct_message`, …) and its per-category preferences and mute rules.
+  `topic_reply`, `direct_message`, …) and its per-category preferences, quiet hours, do-not-disturb and mute rules.
 
 **`gotalk-client`**
 

@@ -425,7 +425,7 @@ Deliverables:
   address, fails as `provider_rejected` rather than marking the subscription `gone`, because an operator's policy
   change should not delete subscriptions; and VAPID `401`/`403` are retried rather than treated as dead endpoints.
 
-### Phase 6 — `gotalk-server` integration ⬜
+### Phase 6 — `gotalk-server` integration ✅
 
 Work happens in `gotalk-server`; the gateway's contract is the deliverable.
 
@@ -444,6 +444,44 @@ Work happens in `gotalk-server`; the gateway's contract is the deliverable.
 - Docs and tests, including an integration test against a gateway container.
 
 Done when a notification created on a test instance triggers a push request that a local gateway accepts.
+
+Deliverables (all in `gotalk-server`; the guide is its
+[docs/push.md](https://github.com/parkerbrown98/gotalk-server/blob/main/docs/push.md)):
+
+- ✅ `internal/pushgw`: GOTALK-SIG-V1 signing (tested against Appendix A of the protocol), the RFC 8291 encryptor
+  (tested against RFC 8291 Appendix A) with padding to 256-byte blocks, and a client for discovery, registration,
+  verification, instance status, batch pushes and device deletion that maps problem documents to error codes.
+- ✅ `push` settings section (`push.enabled`, `push.gateway_url` defaulting to `https://push.gotalk.sh`,
+  `push.contact_email` defaulting to the oldest administrator, `push.signing_key`), editable in the config file, the
+  setup wizard's optional push step, the settings page and `PATCH /instance/config`, with a live check that the
+  gateway answers its discovery document. The Ed25519 key is generated and stored when not configured;
+  `POST /instance/push/keys/rotate` replaces it through the gateway's recovery flow.
+- ✅ Registration loop: registers the instance's `server.public_url`, publishes `push.keys` in
+  `/.well-known/gotalk-instance`, asks the gateway to verify, and re-checks every 6 hours (5 minutes while not
+  active) with one replica per interval. It waits for first-run setup, re-registers after `unknown_key`, and records
+  `pending`, `active`, `suspended`, `blocked` or `error` with the gateway's reason. Every change is an instance
+  audit-log entry (`push.status`), shown in `GET /instance/push`, the settings page, the pre-flight checks and
+  `degraded_features`.
+- ✅ `PushSubscription`s (`POST`, `GET /users/@me/push-subscriptions`, `DELETE …/{id}`) bound to the login session
+  that added them, so signing out stops pushes; up to 25 per account; several accounts may share a device's gateway
+  subscription with their own keys. Removing the last one deletes it at the gateway, and signed-out sessions' are
+  pruned.
+- ✅ Push outbox written in the notification's transaction and drained by every replica: skips read, deleted or
+  stale (6 h) notifications, categories turned off in `GET/PUT /users/@me/push-preferences`, pauses, quiet hours in
+  the person's time zone and presence `dnd`; builds the payload of [payload.md](payload.md) (title, body, badge,
+  thread, deep-link target) within 2,048 bytes; maps urgency and TTL per type; and derives collapse keys per
+  conversation or topic with an HMAC under the instance key. `id_only` subscriptions get no payload.
+- ✅ Gateway responses: `subscription_gone` and `subscription_not_found` delete the device's subscriptions;
+  `rate_limited`, `quota_exceeded` and `provider_unavailable` retry with backoff and `Retry-After` (6 attempts);
+  `instance_not_verified` and `instance_blocked` set the status and hold pushes; key errors trigger registration.
+- ✅ `GET /api/v1/instance` has `features.push` and a `push` object (`enabled`, `available`, `gateway_url`, `modes`,
+  `categories`, `web_apps` with VAPID keys from the cached discovery document).
+- ✅ Tests: unit tests for signing, encryption, payloads, size fitting, quiet hours and collapse keys; API tests
+  against a fake gateway that checks every signature and the well-known document and decrypts pushes with the
+  device key; and `TestRealPushGateway` (build tag `pushgateway`, its own CI job building this repository's image),
+  which registers with the real gateway container and sees a mention accepted as a push.
+- 🟨 Open for review: a direct-message conversation pushes once until it is read (the server keeps one unread DM
+  notification per conversation); and the server, not the client, holds back pushes for presence `dnd`.
 
 ### Phase 7 — `gotalk-client` integration ⬜
 
