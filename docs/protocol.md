@@ -448,7 +448,7 @@ Failures before queueing use an HTTP error ([Errors](#errors)): `404 subscriptio
 `410 subscription_gone`, `413 payload_too_large`, `422 invalid_request`, `429 rate_limited` or `quota_exceeded`.
 
 Failures before queueing also include `503 provider_unavailable` when this gateway has no provider credentials
-for the subscription's app and platform (for example Web Push before it is configured).
+for the subscription's app and platform (for example an app whose VAPID private key is not configured).
 
 **Idempotency.** An instance MAY send `Idempotency-Key` (1 to 64 characters). A repeat of the same key
 from the same instance within 24 hours returns the original response with `Idempotency-Replayed: true` instead of
@@ -518,7 +518,8 @@ TTL, whichever is first). `Retry-After` from a provider is honored. A push with 
 - A push whose retries run out is `failed` with `provider_unavailable`. One whose TTL runs out first is `expired`,
   with the last failure as its `error`, or `null` if it was never attempted.
 - A provider refusal that is not about the token (bad topic, invalid collapse ID, payload rejected) is `failed`
-  with `provider_rejected` and is not retried.
+  with `provider_rejected` and is not retried. So is a Web Push endpoint the gateway no longer delivers to: one
+  outside `devices.web_push_hosts`, or whose host resolves to a non-public address.
 - A push to a subscription that was deleted before delivery is `failed` with `subscription_gone`; one that was
   already `gone` is `gone`.
 - Each attempt reads the subscription's current token, so a token refreshed while a push is queued is used. A

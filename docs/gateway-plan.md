@@ -314,7 +314,7 @@ Deliverables:
   - `410 subscription_gone`, `413 payload_too_large` (over 2,200 decoded bytes), `422 invalid_request` with field
     errors, and `id_only` refused for web;
   - `503 provider_unavailable` when the gateway has no credentials for the subscription's app and platform, which
-    is how web subscriptions are answered until Phase 5.
+    is how web subscriptions were answered until Phase 5.
 - ✅ `GET /v1/pushes/{push_id}`: the delivery-log entry (status, attempts, timestamps, and `error` with the
   provider's short reason once final). Another instance's push is `404 push_not_found`.
 - ✅ `Idempotency-Key`: the `202` response is kept for 24 hours per instance and replayed with
@@ -369,7 +369,7 @@ Deliverables:
   data keys; and no background (`content-available`) pushes, since they do not run the Notification Service
   Extension. Badge counts stay in the encrypted payload, set by the extension.
 
-### Phase 5 — Web Push ⬜
+### Phase 5 — Web Push ✅
 
 - Web Push forwarding: VAPID signing and delivery of the instance-encrypted RFC 8291 body to the browser's push
   service endpoint.
@@ -379,6 +379,51 @@ Deliverables:
 - Documentation of the browser quirks (iOS home-screen PWA requirements, permission prompts).
 
 Done when a registered browser subscription receives a push through the gateway in an end-to-end test.
+
+Deliverables:
+
+- ✅ Web Push provider ([webpush.go](../internal/providers/webpush/webpush.go)): `POST {endpoint}` with the decoded
+  `payload` byte for byte, `Content-Encoding: aes128gcm`, `TTL` (the time left, so retries do not extend it),
+  `Urgency` and `Topic` from `collapse_key`. VAPID (RFC 8292) ES256 tokens with `aud` set to the push service's
+  origin, a 12-hour `exp` and the operator's `sub`, cached per push service, replaced an hour before expiry and
+  re-signed when a service refuses one.
+- ✅ Credentials in the app config: `web.vapid.private_key` or `private_key_file` (the base64url scalar that
+  web-push tools print, or PEM) and `web.vapid.subject` (`mailto:` or `https:`). The gateway refuses to start when
+  the key does not match `web.vapid_public_key`, so discovery always advertises the key pushes are signed with.
+- ✅ Browser registration needed no new endpoint: Phase 3 already registers the endpoint alone, and `p256dh` and
+  `auth` go only to the instance.
+- ✅ Error mapping: `404`, `410` (and Apple's `Unregistered`, `ExpiredToken`, `BadDeviceToken`) mark the
+  subscription `gone` through the Phase 3 compare-and-set; `429` and `5xx` are retried with `Retry-After`; `401` and
+  `403` (VAPID refused) are retried like the other providers' credential errors; other `4xx`, including `413`,
+  are `provider_rejected`. The reason the instance sees is the status or Apple's short reason, never the
+  endpoint or its host.
+- ✅ SSRF guard for endpoints, which come from browsers: the `devices.web_push_hosts` policy is checked at
+  registration and again before each delivery, connections go only to public addresses on port 443 (checked
+  after DNS resolution on every connection), and redirects and proxies are never followed. A blocked endpoint
+  is `provider_rejected` without a request. `devices.web_push_allow_insecure` relaxes this for local fakes only,
+  and the startup warning lists it with the other development settings.
+- ✅ Documentation: [web-push.md](web-push.md) (VAPID key generation and rotation, the client flow, browser
+  support including Safari's Home Screen requirement on iOS, Brave's opt-in, and permission prompt rules), the Web
+  Push mapping in [payload.md](payload.md#provider-mapping), configuration, and a threat-model row for SSRF through
+  endpoints.
+- ✅ Tests:
+  - a fake push service in [providertest](../internal/providers/providertest/webpush.go) that verifies the VAPID
+    token (signature, `aud`, `exp` within 24 hours, `sub`), the headers and the 4 KB limit, and decrypts each push
+    with the subscription's keys like a browser. Its RFC 8291 encryptor and decryptor pass the RFC's Appendix A
+    vector;
+  - the provider against that fake over HTTP/2 and TLS at real push service URLs: header mapping, the token
+    cache per audience, renewal and re-signing, every error class, the policy re-check, the address guard and
+    redirects;
+  - the API through the real queue: a browser decrypts what the instance encrypted, throttling is retried,
+    `413` is rejected, `404` and `410` make the subscription `gone` and a new endpoint reactivates it, and an app
+    without VAPID credentials still gets `503 provider_unavailable`.
+
+  The end-to-end test (`make e2e`, also in CI) plays a browser: it reads the VAPID key from discovery, subscribes
+  at a fake push service, registers the endpoint, and receives and decrypts a push from the container, then
+  unsubscribes and sees `gone`.
+- 🟨 Protocol clarifications for review: a Web Push endpoint outside the policy, or resolving to a non-public
+  address, fails as `provider_rejected` rather than marking the subscription `gone`, because an operator's policy
+  change should not delete subscriptions; and VAPID `401`/`403` are retried rather than treated as dead endpoints.
 
 ### Phase 6 — `gotalk-server` integration ⬜
 

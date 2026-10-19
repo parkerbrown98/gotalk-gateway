@@ -5,10 +5,10 @@ end-to-end encrypted notification payloads to the gateway, and the gateway forwa
 Push. The gateway never sees notification content. [docs/gateway-plan.md](docs/gateway-plan.md) explains why it
 exists, and [docs/protocol.md](docs/protocol.md) specifies the protocol.
 
-**Status:** Phases 1 to 4 are done. The gateway serves discovery, health, readiness and metrics. Instances can
+**Status:** Phases 1 to 5 are done. The gateway serves discovery, health, readiness and metrics. Instances can
 register, prove domain control, rotate and recover keys, and make Ed25519-signed requests. Clients can register,
-refresh and delete device subscriptions. Instances can push to iOS (APNs) and Android (FCM) devices through a
-PostgreSQL-backed queue with retries and dead-token handling. Web Push comes in Phase 5.
+refresh and delete device subscriptions. Instances can push to iOS (APNs), Android (FCM) and browsers (Web Push with
+VAPID) through a PostgreSQL-backed queue with retries and dead-token handling.
 
 ## Quick start
 
@@ -18,8 +18,8 @@ curl http://localhost:8090/.well-known/gotalk-gateway
 ```
 
 This starts the gateway with PostgreSQL and Redis, using [config.example.yaml](config.example.yaml) (placeholder
-app IDs and no provider credentials, so pushes are refused with `provider_unavailable` until you add your APNs and FCM
-credentials; see [docs/configuration.md](docs/configuration.md#apps)). Stop it with `docker compose down`.
+app IDs and no provider credentials, so pushes are refused with `provider_unavailable` until you add your APNs, FCM
+and VAPID credentials; see [docs/configuration.md](docs/configuration.md#apps)). Stop it with `docker compose down`.
 
 To run from source against the Compose database: `docker compose up -d postgres redis`, then
 `make run`. See [docs/development.md](docs/development.md).

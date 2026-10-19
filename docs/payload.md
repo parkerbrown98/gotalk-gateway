@@ -177,11 +177,35 @@ FCM data values are strings, so `gt_v` is a string. Collapsed messages replace e
 "gt_notification_id": "..." }`. `android.ttl` is the time left of the push's TTL when it is sent, so retries do not
 extend it.
 
-**Web Push:** `POST {endpoint}` with the raw body, `Content-Encoding: aes128gcm`, `TTL`, `Urgency`, `Topic`
-(from `collapse_key`) and a VAPID `Authorization` header (`vapid t=<JWT>, k=<public key>`, RFC 8292) signed with the
-app's VAPID key. The gateway refuses `mode: id_only` for web subscriptions (`invalid_request`): a browser decrypts
+**Web Push** (RFC 8030, VAPID per RFC 8292):
+
+```
+POST {endpoint}
+Authorization: vapid t=<JWT>, k=<the app's VAPID public key>
+Content-Type: application/octet-stream
+Content-Encoding: aes128gcm
+TTL: 3600
+Urgency: high
+Topic: c_4f9a1b
+
+<the decoded payload bytes>
+```
+
+The body is the instance's RFC 8291 body exactly as decoded from `payload`; browsers decrypt it natively. `TTL` is
+the time left of the push's TTL when it is sent (so retries do not extend it), `Urgency` is the push's urgency
+(`low`, `normal` or `high`), and `Topic` is `collapse_key`, omitted without one. The VAPID JWT is ES256-signed with
+the app's VAPID private key, with `aud` set to the endpoint's origin, `exp` 12 hours ahead and `sub` the operator
+contact (`web.vapid.subject`). The gateway reuses a token per push service until an hour before it expires.
+
+The push service answers `201 Created`. `404` and `410` mean the browser unsubscribed or the subscription
+expired, and the gateway marks the subscription `gone`. `429` and `5xx` are retried with backoff, honoring
+`Retry-After`. `401` and `403` (the VAPID token was refused) are retried too, since a bad key affects every
+subscription and is fixed by the operator. Other `4xx`, including `413`, are `provider_rejected`.
+
+The gateway refuses `mode: id_only` for web subscriptions (`invalid_request`): a browser decrypts
 every push it receives, so an unencrypted body is useless there. A web client that wants the ID-only behavior has
 the instance send `mode: encrypted` with a plaintext of only `v`, `instance`, `user_id` and `notification_id`.
+[web-push.md](web-push.md) covers browser support and its quirks.
 
 ## Client handling
 

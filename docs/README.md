@@ -8,6 +8,7 @@ Phase 1 (foundation) added the operator and developer guides.
 | [gateway-plan.md](gateway-plan.md) | Why the gateway exists, architecture, phases and risks |
 | [protocol.md](protocol.md) | Discovery, instance registration, request signing, device registration, push requests, errors |
 | [payload.md](payload.md) | Encrypted envelope, `id_only` mode, size limits, provider mapping |
+| [web-push.md](web-push.md) | Web Push: VAPID keys, browser support and quirks, permission prompts |
 | [openapi.yaml](openapi.yaml) | OpenAPI 3.1 contract for every endpoint |
 | [threat-model.md](threat-model.md) | What the gateway can and cannot see, threats and mitigations |
 | [accounts-and-logistics.md](accounts-and-logistics.md) | Provider accounts, domain, naming and licensing |

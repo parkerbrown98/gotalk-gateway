@@ -80,6 +80,7 @@ An instance operator abuses the gateway or the users registered for it.
 | Registering for a real instance to read someone else's notifications | Content is encrypted to a key the registrant controls and shares with the instance. An attacker gets only what the instance would send to the attacker's own account. |
 | Taking over another device's subscription by re-registering its token | Needs the token. The previous secret is invalidated, so a rightful owner who still holds the token can reclaim it. |
 | Probing which subscriptions exist | Missing, unauthorized and foreign subscriptions return the same `404`. IDs are 128-bit and secrets 256-bit random values. *Test: `TestDeviceCrossInstanceMisuse`.* |
+| Using the gateway as a request forger (SSRF through a Web Push endpoint) | Endpoints must be https on port 443 at a known push service (`devices.web_push_hosts`), checked at registration and again before each delivery. Deliveries connect only to public addresses on port 443, checked after DNS resolution on every connection, with no redirects and no proxies. The request is a fixed-shape `POST` whose body the instance chose but whose headers the gateway sets. *Test: `TestWebEndpoints`, `TestConnectionsOnlyGoToPublicAddresses`, `TestRedirectsAreNotFollowed`, `TestRefusedBeforeSending`.* |
 
 ### Stolen instance key
 

@@ -101,7 +101,11 @@ Subscriptions that a provider reports as dead are kept for 7 days and then delet
 
 | Key | Default | Description |
 |---|---|---|
-| `web_push_hosts` | FCM, Mozilla, Apple and Windows push services | Web Push endpoints must be on one of these hosts or a subdomain: `fcm.googleapis.com`, `updates.push.services.mozilla.com`, `web.push.apple.com`, `notify.windows.com`. Set `[]` to accept any public host. Endpoints must use https on port 443 either way. |
+| `web_push_hosts` | FCM, Mozilla, Apple and Windows push services | Web Push endpoints must be on one of these hosts or a subdomain: `fcm.googleapis.com`, `updates.push.services.mozilla.com`, `web.push.apple.com`, `notify.windows.com`. Set `[]` to accept any public host. Endpoints must use https on port 443 either way. The list is checked at registration and again before every delivery, so narrowing it also stops pushes to existing subscriptions (they fail with `provider_rejected`). |
+| `web_push_allow_insecure` | `false` | **Development only.** Accepts and delivers to `http` endpoints on any port and host, including private networks, for a local fake push service. Never enable it in production: it lets anyone who can register a device make the gateway send requests into its own network. |
+
+Web Push deliveries connect only to public addresses on port 443, checked after DNS resolution on every
+connection, and never follow redirects or use proxies.
 
 ### `delivery`
 
@@ -115,7 +119,7 @@ encrypted payload; the delivery log keeps IDs, status and latency for 72 hours.
 | Key | Default | Description |
 |---|---|---|
 | `workers` | `50` | Pushes this replica delivers concurrently. `0` makes an API-only replica that queues pushes but does not deliver them; at least one replica must deliver. |
-| `provider_timeout` | `10s` | Timeout of each request to APNs or FCM (1s to 1m). |
+| `provider_timeout` | `10s` | Timeout of each request to APNs, FCM or a Web Push service (1s to 1m). |
 | `dead_letter_retention` | `24h` | How long a push whose retries ran out stays in the queue for inspection (1m to 720h). |
 
 On shutdown a replica stops taking new pushes from the queue and lets in-flight deliveries finish within
@@ -185,8 +189,7 @@ Each app needs at least one platform.
 
 **Provider credentials.** Without them, devices can still register, but pushes to them are refused with
 `503 provider_unavailable`. Credentials are read at startup, never written to the database, and should be mounted as
-secrets and referenced with the `*_file` settings. Web Push (the VAPID private key) comes in Phase 5; until then
-pushes to web subscriptions are refused the same way.
+secrets and referenced with the `*_file` settings.
 
 ```yaml
 apps:
@@ -203,6 +206,11 @@ apps:
       fcm:
         service_account_file: /run/secrets/fcm.json   # or service_account: the JSON
         project_id: my-firebase-project               # optional; defaults to the key's project
+    web:
+      vapid_public_key: B…
+      vapid:
+        private_key_file: /run/secrets/vapid.key      # or private_key: the key itself
+        subject: mailto:push-ops@example.com          # or an https: contact URL
 ```
 
 | Key | Description |
@@ -213,3 +221,5 @@ apps:
 | `android.fcm.service_account`, `android.fcm.service_account_file` | A Google service account key (JSON) allowed to send with the FCM HTTP v1 API (the "Firebase Cloud Messaging API Admin" role, or `cloudmessaging.messages.create`). Set exactly one. |
 | `android.fcm.project_id` | The Firebase project, when it differs from the key's `project_id`. |
 | `android.fcm.endpoint` | Overrides `https://fcm.googleapis.com`, for testing against a fake. |
+| `web.vapid.private_key`, `web.vapid.private_key_file` | The VAPID private key matching `web.vapid_public_key`: the 32-byte P-256 key in base64url, as `npx web-push generate-vapid-keys` prints it, or a PEM key (`openssl ecparam -name prime256v1 -genkey -noout`). Set exactly one. The gateway refuses to start when it does not match the public key. Browsers subscribe with the public key, so changing the pair invalidates every browser subscription of the app; see [web-push.md](web-push.md#vapid-keys). |
+| `web.vapid.subject` | The VAPID `sub` claim: a `mailto:` or `https:` URL where push services can reach the gateway operator. Required with a private key; Apple's push service refuses tokens without it. |

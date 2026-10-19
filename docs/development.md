@@ -15,7 +15,7 @@ internal/database/      PostgreSQL connection, embedded goose migrations and the
 internal/database/migrations/  Schema (one file per version)
 internal/devices/       Device subscriptions: token validation, register, refresh, delete, dead tokens, pruning
 internal/e2e/           End-to-end test against a running gateway (build tag e2e)
-internal/e2e/gen/       Writes throwaway APNs/FCM credentials and a config for the end-to-end stack into .e2e/
+internal/e2e/gen/       Writes throwaway APNs/FCM/VAPID credentials and a config for the end-to-end stack into .e2e/
 internal/ids/           Prefixed random IDs (inst_, key_, sub_, push_, req_)
 internal/instances/     Registration, verification, rotation, recovery, scheduled re-verification
 internal/nonce/         Replay protection: nonce store in Redis or memory
@@ -24,7 +24,8 @@ internal/protocol/      Fixed protocol values: API versions, platforms, limits
 internal/providers/     Provider interface, failure kinds (retry, gone, rejected) and pooled HTTP/2 transport
 internal/providers/apns/  APNs client: .p8 token auth, payload, priority and error mapping
 internal/providers/fcm/   FCM HTTP v1 client: service-account OAuth, data message and error mapping
-internal/providers/providertest/  Fake APNs and FCM servers for tests and the end-to-end suite
+internal/providers/providertest/  Fake APNs, FCM and Web Push servers (the last also decrypts RFC 8291 like a browser)
+internal/providers/webpush/  Web Push client: VAPID (RFC 8292), TTL/Urgency/Topic headers, SSRF guard, error mapping
 internal/push/          Push requests: validation, idempotency, queueing (river), delivery worker, delivery log
 internal/ratelimit/     Named rate limits in Redis or memory
 internal/signing/       GOTALK-SIG-V1 request signing (sign, parse, verify)
@@ -44,7 +45,7 @@ scripts/smoke.sh        Smoke test for a running gateway
 | Run from source | `docker compose up -d postgres redis`, then `make run` |
 | All tests (needs Docker) | `make test` |
 | Tests without containers | `make test-unit` (runs `go test -short`; PostgreSQL and Redis tests are skipped) |
-| End-to-end test | `make e2e`: generates throwaway provider credentials into `.e2e/`, starts the stack in development mode (`docker-compose.e2e.yml`) and runs `internal/e2e`. The test plays an instance (its well-known document on port 18080) and APNs and FCM (fakes on 18081 and 18082): it registers, verifies, signs, rotates and recovers, manages devices, and pushes through retries and dead tokens |
+| End-to-end test | `make e2e`: generates throwaway provider credentials into `.e2e/`, starts the stack in development mode (`docker-compose.e2e.yml`) and runs `internal/e2e`. The test plays an instance (its well-known document on port 18080), APNs and FCM (fakes on 18081 and 18082) and a browser with its push service (a Web Push fake on 18083): it registers, verifies, signs, rotates and recovers, manages devices, and pushes through retries and dead tokens |
 | Lint and format | `make lint`, `make fmt` |
 | Regenerate queries | `make sqlc` after you change `internal/store/queries/` or a migration |
 | Print the implemented API spec | `make openapi` |
