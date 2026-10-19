@@ -48,9 +48,8 @@ type AppLister interface {
 type Options struct {
 	// ExpiryDays is how long a subscription lives without a refresh.
 	ExpiryDays int
-	// WebPushHosts restricts Web Push endpoints to these push services (and their
-	// subdomains). Empty allows any public host.
-	WebPushHosts []string
+	// WebPush decides which Web Push endpoints can be registered.
+	WebPush WebPushPolicy
 	// AllowHTTPOrigins accepts http:// instance origins (development only).
 	AllowHTTPOrigins bool
 	Logger           *slog.Logger
@@ -147,7 +146,7 @@ func (s *Service) Register(ctx context.Context, in RegisterInput, admit Admit) (
 	if err := s.checkApp(ctx, in.AppID, in.Platform); err != nil {
 		return nil, err
 	}
-	token, err := NormalizeToken(in.Platform, in.Token, s.opts.WebPushHosts)
+	token, err := NormalizeToken(in.Platform, in.Token, s.opts.WebPush)
 	if err != nil {
 		return nil, invalidToken(tokenField(in.Platform), err.Error())
 	}
@@ -296,7 +295,7 @@ func (s *Service) Refresh(ctx context.Context, d store.Device, in RefreshInput, 
 
 	token, tokenHash, env := d.Token, d.TokenHash, d.ApnsEnvironment
 	if newToken != nil {
-		if token, err = NormalizeToken(d.Platform, *newToken, s.opts.WebPushHosts); err != nil {
+		if token, err = NormalizeToken(d.Platform, *newToken, s.opts.WebPush); err != nil {
 			return nil, invalidToken(tokenField(d.Platform), err.Error())
 		}
 		tokenHash = HashToken(token)

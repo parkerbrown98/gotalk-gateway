@@ -40,9 +40,20 @@ var (
 	fcmTokenPattern  = regexp.MustCompile(`^[A-Za-z0-9_.:-]+$`)
 )
 
+// WebPushPolicy decides which Web Push endpoints the gateway accepts at registration and
+// delivers to.
+type WebPushPolicy struct {
+	// Hosts restricts endpoints to these push services and their subdomains. Empty allows
+	// any public host.
+	Hosts []string
+	// AllowInsecure accepts http endpoints on any port and host, including private networks.
+	// Development only (a local fake push service).
+	AllowInsecure bool
+}
+
 // NormalizeToken validates a platform token or Web Push endpoint and returns the form the
 // gateway stores. APNs tokens are case-insensitive hex and are stored in lower case.
-func NormalizeToken(platform, token string, webPushHosts []string) (string, error) {
+func NormalizeToken(platform, token string, web WebPushPolicy) (string, error) {
 	switch platform {
 	case IOS:
 		if !apnsTokenPattern.MatchString(token) {
@@ -55,44 +66,47 @@ func NormalizeToken(platform, token string, webPushHosts []string) (string, erro
 		}
 		return token, nil
 	case Web:
-		return token, validateEndpoint(token, webPushHosts)
+		return token, web.Check(token)
 	default:
 		return "", fmt.Errorf("unknown platform %q", platform)
 	}
 }
 
-// validateEndpoint accepts https Web Push endpoints on a public host (and, when
-// webPushHosts is set, on a known push service). The endpoint is stored verbatim because
-// push services treat it as opaque.
-func validateEndpoint(endpoint string, webPushHosts []string) error {
+// Check accepts https Web Push endpoints on a public host (and, when Hosts is set, on a
+// known push service). The endpoint is stored verbatim because push services treat it as
+// opaque. The provider checks it again before each delivery, so narrowing the policy also
+// covers existing subscriptions.
+func (p WebPushPolicy) Check(endpoint string) error {
 	if len(endpoint) > maxEndpointLength {
 		return fmt.Errorf("a Web Push endpoint is at most %d characters", maxEndpointLength)
 	}
 	u, err := url.Parse(endpoint)
-	if err != nil || u.Scheme != "https" || u.Host == "" || u.Opaque != "" {
+	if err != nil || u.Host == "" || u.Opaque != "" || (u.Scheme != "https" && (u.Scheme != "http" || !p.AllowInsecure)) {
 		return errors.New("a Web Push endpoint must be an https URL")
 	}
 	if u.User != nil || u.Fragment != "" {
 		return errors.New("a Web Push endpoint must not contain user info or a fragment")
 	}
-	if p := u.Port(); p != "" && p != "443" {
+	if port := u.Port(); port != "" && port != "443" && !p.AllowInsecure {
 		return errors.New("a Web Push endpoint must use port 443")
 	}
 	host := strings.TrimSuffix(strings.ToLower(u.Hostname()), ".")
-	if addr, err := netip.ParseAddr(host); err == nil {
-		if !wellknown.IsPublic(addr) || len(webPushHosts) > 0 {
+	if !p.AllowInsecure {
+		if addr, err := netip.ParseAddr(host); err == nil {
+			if !wellknown.IsPublic(addr) || len(p.Hosts) > 0 {
+				return errors.New("the gateway does not send to this push service")
+			}
+			return nil
+		}
+		if !strings.Contains(host, ".") || strings.HasSuffix(host, ".localhost") || strings.HasSuffix(host, ".local") ||
+			strings.HasSuffix(host, ".internal") {
 			return errors.New("the gateway does not send to this push service")
 		}
+	}
+	if len(p.Hosts) == 0 {
 		return nil
 	}
-	if !strings.Contains(host, ".") || strings.HasSuffix(host, ".localhost") || strings.HasSuffix(host, ".local") ||
-		strings.HasSuffix(host, ".internal") {
-		return errors.New("the gateway does not send to this push service")
-	}
-	if len(webPushHosts) == 0 {
-		return nil
-	}
-	for _, allowed := range webPushHosts {
+	for _, allowed := range p.Hosts {
 		if host == allowed || strings.HasSuffix(host, "."+allowed) {
 			return nil
 		}

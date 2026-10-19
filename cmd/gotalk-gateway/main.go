@@ -313,9 +313,10 @@ func serve(ctx context.Context, cfg *config.Config, log *slog.Logger) error {
 	if err := bl.Refresh(ctx); err != nil {
 		return err
 	}
-	if cfg.Instances.AllowHTTP || cfg.Instances.AllowPrivateNetworks {
+	if cfg.Instances.AllowHTTP || cfg.Instances.AllowPrivateNetworks || cfg.Devices.WebPushAllowInsecure {
 		log.Warn("development settings are enabled; never use them in production",
-			"instances.allow_http", cfg.Instances.AllowHTTP, "instances.allow_private_networks", cfg.Instances.AllowPrivateNetworks)
+			"instances.allow_http", cfg.Instances.AllowHTTP, "instances.allow_private_networks", cfg.Instances.AllowPrivateNetworks,
+			"devices.web_push_allow_insecure", cfg.Devices.WebPushAllowInsecure)
 	}
 	fetcher := wellknown.New(wellknown.Options{
 		AllowPrivateNetworks: cfg.Instances.AllowPrivateNetworks,
@@ -325,7 +326,7 @@ func serve(ctx context.Context, cfg *config.Config, log *slog.Logger) error {
 	svc := instances.New(pool, fetcher, bl, instances.Options{AllowHTTP: cfg.Instances.AllowHTTP, Logger: log})
 	devicesSvc := devices.New(pool, registry, bl, devices.Options{
 		ExpiryDays:       cfg.Gateway.SubscriptionExpiryDays,
-		WebPushHosts:     cfg.Devices.WebPushHosts,
+		WebPush:          cfg.Devices.WebPushPolicy(),
 		AllowHTTPOrigins: cfg.Instances.AllowHTTP,
 		Logger:           log,
 	})
@@ -335,7 +336,7 @@ func serve(ctx context.Context, cfg *config.Config, log *slog.Logger) error {
 	}
 
 	metrics := api.NewMetrics(version)
-	providerRegistry, err := push.BuildProviders(cfg.Apps)
+	providerRegistry, err := push.BuildProviders(cfg.Apps, push.ProviderOptions{WebPush: cfg.Devices.WebPushPolicy()})
 	if err != nil {
 		return err
 	}

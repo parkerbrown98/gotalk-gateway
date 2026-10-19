@@ -15,6 +15,7 @@ import (
 	"github.com/parkerbrown98/gotalk-gateway/internal/providers"
 	"github.com/parkerbrown98/gotalk-gateway/internal/providers/apns"
 	"github.com/parkerbrown98/gotalk-gateway/internal/providers/fcm"
+	"github.com/parkerbrown98/gotalk-gateway/internal/providers/webpush"
 )
 
 type QueueOptions struct {
@@ -59,8 +60,14 @@ func NewQueue(pool *pgxpool.Pool, w *Worker, o QueueOptions) (*river.Client[pgx.
 	return river.NewClient(riverpgxv5.New(pool), cfg)
 }
 
+// ProviderOptions are gateway-wide settings of the provider clients.
+type ProviderOptions struct {
+	// WebPush is the endpoint policy, checked again before each Web Push delivery.
+	WebPush devices.WebPushPolicy
+}
+
 // BuildProviders creates the provider clients of every app platform with credentials.
-func BuildProviders(list []apps.App) (*providers.Registry, error) {
+func BuildProviders(list []apps.App, o ProviderOptions) (*providers.Registry, error) {
 	r := providers.NewRegistry()
 	for _, a := range list {
 		if a.IOS != nil && a.IOS.APNs != nil {
@@ -89,6 +96,21 @@ func BuildProviders(list []apps.App) (*providers.Registry, error) {
 				return nil, fmt.Errorf("app %q: %w", a.ID, err)
 			}
 			r.Set(a.ID, devices.Android, client)
+		}
+		if a.Web != nil && a.Web.VAPID != nil {
+			v := a.Web.VAPID
+			key, err := v.Key()
+			if err != nil {
+				return nil, fmt.Errorf("app %q: reading web.vapid.private_key_file: %w", a.ID, err)
+			}
+			client, err := webpush.New(webpush.Config{
+				PublicKey: a.Web.VAPIDPublicKey, PrivateKey: key, Subject: v.Subject,
+				CheckEndpoint: o.WebPush.Check, Insecure: o.WebPush.AllowInsecure,
+			})
+			if err != nil {
+				return nil, fmt.Errorf("app %q: %w", a.ID, err)
+			}
+			r.Set(a.ID, devices.Web, client)
 		}
 	}
 	return r, nil

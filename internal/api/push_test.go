@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/base64"
 	"net/http"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -127,6 +128,85 @@ func TestPushDelivery(t *testing.T) {
 	assert.Equal(t, 0.0, usage["pushes_failed"])
 }
 
+// webSubscription subscribes a browser at the push service base URL and registers its
+// endpoint with the gateway, like the web client does.
+func (g *gw) webSubscription(base string) (providertest.Subscription, device) {
+	g.t.Helper()
+	s := g.web.Subscribe(base)
+	d := g.newDevice(map[string]any{"app_id": "gotalk", "instance_origin": testOrigin, "platform": "web", "endpoint": s.Endpoint})
+	return s, d
+}
+
+// encryptFor plays the instance: it encrypts plaintext to the browser's keys.
+func encryptFor(t *testing.T, s providertest.Subscription, plaintext string) string {
+	t.Helper()
+	body, err := providertest.Encrypt(s.P256dh, s.Auth, []byte(plaintext), 256-len(plaintext)%256-1)
+	require.NoError(t, err)
+	return base64.RawURLEncoding.EncodeToString(body)
+}
+
+func TestWebPushDelivery(t *testing.T) {
+	g := newGateway(t, withDelivery)
+	_, k := g.activeInstance()
+	sub, d := g.webSubscription("https://fcm.googleapis.com/fcm/send")
+
+	plaintext := `{"v":1,"instance":"https://forum.example","type":"mention","notification_id":"ntf_1"}`
+	acc := g.signed(k, "POST", "/v1/push", pushBody(d.id, "payload", encryptFor(t, sub, plaintext),
+		"urgency", "high", "ttl", 600, "collapse_key", "c_4f9a1b")).expect(202).obj()
+	st := g.waitPush(k, acc["push_id"].(string), "sent")
+	assert.Equal(t, 1.0, st["attempts"])
+
+	reqs := g.web.Requests(sub.Token)
+	require.Len(t, reqs, 1)
+	r := reqs[0]
+	require.NoError(t, r.DecryptErr)
+	assert.Equal(t, plaintext, string(r.Plaintext), "the browser decrypts what the instance encrypted")
+	assert.Equal(t, 2, r.Proto)
+	assert.Equal(t, "high", r.Header.Get("Urgency"))
+	assert.Equal(t, "c_4f9a1b", r.Header.Get("Topic"))
+	assert.Equal(t, "aes128gcm", r.Header.Get("Content-Encoding"))
+	ttl, err := strconv.Atoi(r.Header.Get("TTL"))
+	require.NoError(t, err)
+	assert.InDelta(t, 600, ttl, 5)
+	assert.Contains(t, r.Header.Get("Authorization"), ", k="+testVAPIDKey, "signed with the app's VAPID key")
+
+	// Throttling is retried; the browser gets the push once.
+	moz, mozDevice := g.webSubscription("https://updates.push.services.mozilla.com/wpush/v2")
+	g.web.Respond(moz.Token, providertest.Response{Status: 429}, providertest.Response{Status: 503})
+	acc = g.signed(k, "POST", "/v1/push", pushBody(mozDevice.id, "payload", encryptFor(t, moz, `{"v":1}`))).expect(202).obj()
+	st = g.waitPush(k, acc["push_id"].(string), "sent")
+	assert.Equal(t, 3.0, st["attempts"])
+	assert.Equal(t, `{"v":1}`, string(g.web.Requests(moz.Token)[2].Plaintext))
+
+	// A refused body is not retried.
+	g.web.Respond(moz.Token, providertest.Response{Status: 413})
+	acc = g.signed(k, "POST", "/v1/push", pushBody(mozDevice.id, "payload", encryptFor(t, moz, `{"v":1}`))).expect(202).obj()
+	st = g.waitPush(k, acc["push_id"].(string), "failed")
+	assert.Equal(t, map[string]any{
+		"code": "provider_rejected", "message": "The provider permanently refused the push (Web Push 413 Request Entity Too Large).",
+	}, st["error"])
+}
+
+func TestWebPushDeadEndpoint(t *testing.T) {
+	g := newGateway(t, withDelivery)
+	_, k := g.activeInstance()
+	for _, status := range []int{410, 404} {
+		sub, d := g.webSubscription("https://web.push.apple.com")
+		g.web.Respond(sub.Token, providertest.Response{Status: status})
+		acc := g.signed(k, "POST", "/v1/push", pushBody(d.id, "payload", encryptFor(t, sub, `{"v":1}`))).expect(202).obj()
+		st := g.waitPush(k, acc["push_id"].(string), "gone")
+		assert.Equal(t, "subscription_gone", st["error"].(map[string]any)["code"])
+		g.signed(k, "POST", "/v1/push", pushBody(d.id)).expectProblem(410, problem.SubscriptionGone)
+
+		// The browser subscribing again (a new endpoint) reactivates the subscription.
+		fresh := g.web.Subscribe("https://web.push.apple.com")
+		g.withSecret(d.secret, "PUT", "/v1/devices/"+d.id, map[string]any{"endpoint": fresh.Endpoint}).expect(200)
+		acc = g.signed(k, "POST", "/v1/push", pushBody(d.id, "payload", encryptFor(t, fresh, `{"v":2}`))).expect(202).obj()
+		g.waitPush(k, acc["push_id"].(string), "sent")
+		assert.Equal(t, `{"v":2}`, string(g.web.Requests(fresh.Token)[0].Plaintext))
+	}
+}
+
 func TestPushRetriesAndFailures(t *testing.T) {
 	g := newGateway(t, withDelivery)
 	_, k := g.activeInstance()
@@ -235,8 +315,9 @@ func TestPushValidation(t *testing.T) {
 	web := g.newDevice(webBody(testOrigin))
 	p = g.signed(k, "POST", "/v1/push", pushBody(web.id, "mode", "id_only", "payload", nil)).expectProblem(422, problem.InvalidRequest)
 	assert.Equal(t, "mode", p.Errors[0].Field)
-	p = g.signed(k, "POST", "/v1/push", pushBody(web.id)).expectProblem(503, problem.ProviderUnavailable)
-	assert.Contains(t, p.Detail, "web devices", "Web Push arrives in Phase 5")
+	droidWeb := g.newDevice(map[string]any{"app_id": "droid", "instance_origin": testOrigin, "platform": "web", "endpoint": webEndpoint})
+	p = g.signed(k, "POST", "/v1/push", pushBody(droidWeb.id)).expectProblem(503, problem.ProviderUnavailable)
+	assert.Contains(t, p.Detail, `web devices of app "droid"`, "an app without VAPID credentials")
 	droid := g.newDevice(androidBody(testOrigin, "droid", fcmToken("Dr")))
 	g.signed(k, "POST", "/v1/push", pushBody(droid.id)).expectProblem(503, problem.ProviderUnavailable)
 	g.markGone(d.id)

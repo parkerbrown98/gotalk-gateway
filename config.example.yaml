@@ -65,12 +65,15 @@ devices:
     - updates.push.services.mozilla.com # Firefox
     - web.push.apple.com # Safari
     - notify.windows.com # Edge
+  # Development only: accept and deliver to http endpoints on any host and port, including
+  # private networks (a local fake push service). Never enable it in production.
+  web_push_allow_insecure: false
 
 delivery:
   # Pushes this replica delivers concurrently. 0 makes it queue pushes without delivering
   # them (API-only replicas); at least one replica must deliver.
   workers: 50
-  # Timeout of each request to APNs or FCM.
+  # Timeout of each request to APNs, FCM or a Web Push service.
   provider_timeout: 10s
   # How long a push whose retries ran out is kept in the queue with its errors.
   dead_letter_retention: 24h
@@ -96,8 +99,7 @@ ratelimit:
 # be declared in this file. The values below are placeholders for local development.
 #
 # Without provider credentials, devices can still register, but pushes to them are refused
-# with provider_unavailable. Prefer the *_file settings with mounted secrets. The VAPID
-# private key for Web Push is added in Phase 5.
+# with provider_unavailable. Prefer the *_file settings with mounted secrets.
 apps:
   - id: gotalk
     name: Gotalk
@@ -116,3 +118,6 @@ apps:
       # Uncompressed P-256 public key, base64url without padding. Placeholder: replace with
       # your own VAPID public key.
       vapid_public_key: BExMJ__m8K0lZhFzYG_SNZhoRmRL6BbVOMd25fGlwCN2uGyylC_WegHE-InIhLxpzs3kl6KqUfAS6lMIoFdne2Y
+      # vapid:
+      #   private_key_file: /run/secrets/vapid.key   # matches vapid_public_key
+      #   subject: mailto:ops@push.example          # or an https: contact URL

@@ -17,9 +17,11 @@ import (
 	"github.com/parkerbrown98/gotalk-gateway/internal/apps"
 	"github.com/parkerbrown98/gotalk-gateway/internal/config"
 	"github.com/parkerbrown98/gotalk-gateway/internal/problem"
+	"github.com/parkerbrown98/gotalk-gateway/internal/providers/providertest"
 )
 
-const testVAPIDKey = "BExMJ__m8K0lZhFzYG_SNZhoRmRL6BbVOMd25fGlwCN2uGyylC_WegHE-InIhLxpzs3kl6KqUfAS6lMIoFdne2Y"
+// testVAPIDKey is the gotalk app's VAPID public key; the gateway signs with testVAPIDPrivate.
+var testVAPIDPrivate, testVAPIDKey = providertest.NewVAPIDKey()
 
 type fakeApps struct {
 	list []apps.App

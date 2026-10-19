@@ -14,6 +14,7 @@ import (
 	"os"
 	"regexp"
 	"slices"
+	"strings"
 	"sync"
 	"time"
 
@@ -97,6 +98,25 @@ func inlineOrFile(inline, path string) ([]byte, error) {
 type Web struct {
 	// VAPIDPublicKey is the uncompressed P-256 public key, base64url without padding.
 	VAPIDPublicKey string `koanf:"vapid_public_key"`
+	// VAPID holds the private key pushes are signed with. Without it browsers can register,
+	// but pushes to them are refused with provider_unavailable.
+	VAPID *VAPID `koanf:"vapid"`
+}
+
+// VAPID is the application server identity of RFC 8292.
+type VAPID struct {
+	// PrivateKey is the P-256 private key matching vapid_public_key: the 32-byte scalar in
+	// base64url (as web-push tools print it) or a PEM key. PrivateKeyFile is a path to it.
+	// Set one.
+	PrivateKey     string `koanf:"private_key"`
+	PrivateKeyFile string `koanf:"private_key_file"`
+	// Subject is the operator contact push services may use: a mailto: or https: URL.
+	Subject string `koanf:"subject"`
+}
+
+// Key returns the private key, reading it from PrivateKeyFile when that is set.
+func (v *VAPID) Key() ([]byte, error) {
+	return inlineOrFile(v.PrivateKey, v.PrivateKeyFile)
 }
 
 // Platforms lists the platforms the app is configured for, in protocol order.
@@ -181,6 +201,14 @@ func Validate(list []App) []error {
 			if err := ValidateVAPIDPublicKey(a.Web.VAPIDPublicKey); err != nil {
 				add(i, "web.vapid_public_key %v", err)
 			}
+			if v := a.Web.VAPID; v != nil {
+				if (v.PrivateKey == "") == (v.PrivateKeyFile == "") {
+					add(i, "web.vapid needs exactly one of private_key or private_key_file")
+				}
+				if err := ValidateVAPIDSubject(v.Subject); err != nil {
+					add(i, "web.vapid.subject %v", err)
+				}
+			}
 		}
 	}
 	return errs
@@ -189,6 +217,23 @@ func Validate(list []App) []error {
 func absoluteURL(v string) bool {
 	u, err := url.Parse(v)
 	return err == nil && (u.Scheme == "https" || u.Scheme == "http") && u.Host != "" && u.RawQuery == "" && u.Fragment == ""
+}
+
+// ValidateVAPIDSubject checks the VAPID sub claim: a mailto: or https: URL (RFC 8292 §2.1).
+// Apple's push service refuses tokens without one.
+func ValidateVAPIDSubject(sub string) error {
+	u, err := url.Parse(sub)
+	switch {
+	case sub == "":
+		return errors.New("must be set to a mailto: or https: contact URL")
+	case err != nil:
+		return fmt.Errorf("%q is not a URL", sub)
+	case u.Scheme == "mailto" && strings.Contains(u.Opaque, "@"):
+		return nil
+	case u.Scheme == "https" && u.Host != "":
+		return nil
+	}
+	return fmt.Errorf("%q must be a mailto: or https: URL", sub)
 }
 
 // ValidateVAPIDPublicKey checks that key is an unpadded base64url uncompressed P-256 point.

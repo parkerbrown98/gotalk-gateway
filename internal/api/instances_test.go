@@ -36,6 +36,7 @@ import (
 	"github.com/parkerbrown98/gotalk-gateway/internal/providers/apns"
 	"github.com/parkerbrown98/gotalk-gateway/internal/providers/fcm"
 	"github.com/parkerbrown98/gotalk-gateway/internal/providers/providertest"
+	"github.com/parkerbrown98/gotalk-gateway/internal/providers/webpush"
 	"github.com/parkerbrown98/gotalk-gateway/internal/push"
 	"github.com/parkerbrown98/gotalk-gateway/internal/ratelimit"
 	"github.com/parkerbrown98/gotalk-gateway/internal/signing"
@@ -117,14 +118,17 @@ type gw struct {
 	queue   *river.Client[pgx.Tx]
 	apns    *providertest.APNs
 	fcm     *providertest.FCM
+	web     *providertest.WebPush
 }
 
-// fakeProviders are APNs and FCM fakes shared by every test gateway (tests do not run in
-// parallel), with clients for the gotalk app: iOS through APNs and Android through FCM. The
-// droid app and web subscriptions have no provider.
+// fakeProviders are APNs, FCM and Web Push fakes shared by every test gateway (tests do not
+// run in parallel), with clients for the gotalk app: iOS through APNs, Android through FCM and
+// web through the Web Push fake, which answers for every push service host. The droid app has
+// no credentials for any platform.
 type sharedFakes struct {
 	apns    *providertest.APNs
 	fcm     *providertest.FCM
+	web     *providertest.WebPush
 	clients map[string]providers.Provider
 }
 
@@ -151,14 +155,26 @@ var fakeProviders = sync.OnceValue(func() sharedFakes {
 	if err != nil {
 		panic(err)
 	}
-	return sharedFakes{apnsFake, fcmFake, map[string]providers.Provider{devices.IOS: apnsClient, devices.Android: fcmClient}}
+	webFake := providertest.NewWebPush()
+	webFake.PublicKey = testVAPIDKey
+	webHTTP, _ := providertest.ServeTLS(webFake)
+	webClient, err := webpush.New(webpush.Config{
+		PublicKey: testVAPIDKey, PrivateKey: []byte(testVAPIDPrivate), Subject: "mailto:ops@push.example",
+		CheckEndpoint: devices.WebPushPolicy{Hosts: devices.DefaultWebPushHosts}.Check, HTTPClient: webHTTP,
+	})
+	if err != nil {
+		panic(err)
+	}
+	return sharedFakes{apnsFake, fcmFake, webFake, map[string]providers.Provider{
+		devices.IOS: apnsClient, devices.Android: fcmClient, devices.Web: webClient,
+	}}
 })
 
 // testApps are the apps every test gateway serves.
 var testApps = []apps.App{
 	{ID: "gotalk", Name: "Gotalk", IOS: &apps.IOS{BundleID: "app.example.gotalk"},
 		Android: &apps.Android{PackageName: "app.example.gotalk"}, Web: &apps.Web{VAPIDPublicKey: testVAPIDKey}},
-	{ID: "droid", Name: "Droid", Android: &apps.Android{PackageName: "com.example.droid"}},
+	{ID: "droid", Name: "Droid", Android: &apps.Android{PackageName: "com.example.droid"}, Web: &apps.Web{VAPIDPublicKey: testVAPIDKey}},
 }
 
 type gwOpts struct {
@@ -191,7 +207,7 @@ func newGateway(t *testing.T, opts ...func(*gwOpts)) *gw {
 	_, err = registry.Sync(context.Background(), testApps)
 	require.NoError(t, err)
 	devicesSvc := devices.New(o.pool, registry, bl, devices.Options{
-		ExpiryDays: cfg.Gateway.SubscriptionExpiryDays, WebPushHosts: devices.DefaultWebPushHosts, Logger: log,
+		ExpiryDays: cfg.Gateway.SubscriptionExpiryDays, WebPush: devices.WebPushPolicy{Hosts: devices.DefaultWebPushHosts}, Logger: log,
 	})
 	limiter, err := ratelimit.New(o.rdb, o.rates)
 	require.NoError(t, err)
@@ -200,6 +216,7 @@ func newGateway(t *testing.T, opts ...func(*gwOpts)) *gw {
 	apnsFake, fcmFake := fakes.apns, fakes.fcm
 	apnsFake.Reset()
 	fcmFake.Reset()
+	fakes.web.Reset()
 	reg := providers.NewRegistry()
 	for platform, c := range fakes.clients {
 		reg.Set("gotalk", platform, c)
@@ -226,7 +243,7 @@ func newGateway(t *testing.T, opts ...func(*gwOpts)) *gw {
 		Instances: svc, Devices: devicesSvc, Push: pushSvc, Nonces: nonce.New(o.rdb), Limiter: limiter, Blocklist: bl,
 	})
 	return &gw{t: t, srv: srv, pool: o.pool, svc: svc, devices: devicesSvc, origins: origins, bl: bl,
-		push: pushSvc, queue: queue, apns: apnsFake, fcm: fcmFake}
+		push: pushSvc, queue: queue, apns: apnsFake, fcm: fcmFake, web: fakes.web}
 }
 
 type resp struct {

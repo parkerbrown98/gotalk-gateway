@@ -135,6 +135,14 @@ type Devices struct {
 	// WebPushHosts restricts Web Push endpoints to these push services and their
 	// subdomains. An empty list allows any public host.
 	WebPushHosts []string `koanf:"web_push_hosts"`
+	// WebPushAllowInsecure accepts and delivers to http Web Push endpoints on any port,
+	// including private networks. Development only: it is for a local fake push service.
+	WebPushAllowInsecure bool `koanf:"web_push_allow_insecure"`
+}
+
+// WebPushPolicy is the endpoint policy for registration and delivery.
+func (d Devices) WebPushPolicy() devices.WebPushPolicy {
+	return devices.WebPushPolicy{Hosts: d.WebPushHosts, AllowInsecure: d.WebPushAllowInsecure}
 }
 
 // Delivery controls the push queue and the provider clients.
@@ -142,7 +150,7 @@ type Delivery struct {
 	// Workers is how many pushes this replica delivers concurrently. 0 makes it accept and
 	// queue pushes without delivering any (for API-only replicas).
 	Workers int `koanf:"workers"`
-	// ProviderTimeout bounds each request to APNs or FCM.
+	// ProviderTimeout bounds each request to APNs, FCM or a Web Push service.
 	ProviderTimeout time.Duration `koanf:"provider_timeout"`
 	// DeadLetterRetention is how long a push whose retries ran out stays in the queue, with
 	// its errors, for inspection.
@@ -212,6 +220,7 @@ func defaults() map[string]any {
 		"ratelimit.device_token":           "10-H",
 		"ratelimit.device_update":          "60-H",
 		"devices.web_push_hosts":           slices.Clone(devices.DefaultWebPushHosts),
+		"devices.web_push_allow_insecure":  false,
 		"delivery.workers":                 50,
 		"delivery.provider_timeout":        "10s",
 		"delivery.dead_letter_retention":   "24h",

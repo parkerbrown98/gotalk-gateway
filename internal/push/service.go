@@ -1,6 +1,6 @@
 // Package push accepts push requests from instances and delivers them (docs/protocol.md,
 // "Push requests"). Accepted pushes are written to the delivery log and queued on river in
-// one transaction; workers hand them to the APNs and FCM providers with retries, backoff
+// one transaction; workers hand them to the APNs, FCM and Web Push providers with retries, backoff
 // and dead-lettering. Nothing here stores or reads notification content: the encrypted body
 // lives in the queue only until the push is delivered or given up.
 package push

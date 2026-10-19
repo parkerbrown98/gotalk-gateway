@@ -8,6 +8,8 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/parkerbrown98/gotalk-gateway/internal/devices"
 )
 
 const testVAPIDKey = "BExMJ__m8K0lZhFzYG_SNZhoRmRL6BbVOMd25fGlwCN2uGyylC_WegHE-InIhLxpzs3kl6KqUfAS6lMIoFdne2Y"
@@ -163,6 +165,24 @@ apps:
 	assert.JSONEq(t, `{"type":"service_account"}`, string(sa))
 	assert.Equal(t, "demo-project", a.Android.FCM.ProjectID)
 
+	vapidFile := filepath.Join(dir, "vapid.key")
+	require.NoError(t, os.WriteFile(vapidFile, []byte("vapid-private"), 0o600))
+	path = writeFile(t, `
+apps:
+  - id: gotalk
+    name: Gotalk
+    web:
+      vapid_public_key: `+testVAPIDKey+`
+      vapid:
+        private_key_file: `+vapidFile+`
+        subject: mailto:ops@push.example
+`)
+	cfg, err = load(path, nil, environ())
+	require.NoError(t, err)
+	vapid, err := cfg.Apps[0].Web.VAPID.Key()
+	require.NoError(t, err)
+	assert.Equal(t, "vapid-private", string(vapid))
+	assert.Equal(t, "mailto:ops@push.example", cfg.Apps[0].Web.VAPID.Subject)
 	path = writeFile(t, `
 apps:
   - id: gotalk
@@ -180,12 +200,17 @@ apps:
       fcm:
         project_id: Bad_Project
         endpoint: /relative
+    web:
+      vapid_public_key: `+testVAPIDKey+`
+      vapid:
+        subject: ops@push.example
 `)
 	_, err = load(path, nil, environ())
 	require.Error(t, err)
 	for _, want := range []string{
 		"ios.apns.team_id", "exactly one of private_key or private_key_file", "ios.apns.production_url",
 		"exactly one of service_account or service_account_file", "android.fcm.project_id", "android.fcm.endpoint",
+		"web.vapid needs exactly one of private_key or private_key_file", "web.vapid.subject",
 	} {
 		assert.Contains(t, err.Error(), want)
 	}
@@ -259,10 +284,12 @@ func TestInstancesAndRateLimit(t *testing.T) {
 		"device_registration": "60-H", "device_token": "10-H", "device_update": "60-H",
 	}, cfg.RateLimit.Rules())
 	assert.Contains(t, cfg.Devices.WebPushHosts, "fcm.googleapis.com")
+	assert.False(t, cfg.Devices.WebPushAllowInsecure)
 
-	cfg, err = load("", map[string]string{"devices.web_push_hosts": "Push.Example., fcm.googleapis.com"}, environ())
+	cfg, err = load("", map[string]string{"devices.web_push_hosts": "Push.Example., fcm.googleapis.com"}, environ("GOTALK_GATEWAY_DEVICES_WEB_PUSH_ALLOW_INSECURE=true"))
 	require.NoError(t, err)
 	assert.Equal(t, []string{"push.example", "fcm.googleapis.com"}, cfg.Devices.WebPushHosts)
+	assert.Equal(t, devices.WebPushPolicy{Hosts: []string{"push.example", "fcm.googleapis.com"}, AllowInsecure: true}, cfg.Devices.WebPushPolicy())
 	_, err = load("", map[string]string{"devices.web_push_hosts": "https://push.example/x"}, environ())
 	assert.ErrorContains(t, err, "devices.web_push_hosts")
 

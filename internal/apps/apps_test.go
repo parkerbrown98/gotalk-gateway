@@ -33,6 +33,15 @@ func TestValidateVAPIDPublicKey(t *testing.T) {
 	assert.ErrorContains(t, ValidateVAPIDPublicKey(base64.RawURLEncoding.EncodeToString(notOnCurve)), "curve")
 }
 
+func TestValidateVAPIDSubject(t *testing.T) {
+	for _, ok := range []string{"mailto:ops@push.example", "https://push.example/contact"} {
+		assert.NoError(t, ValidateVAPIDSubject(ok), ok)
+	}
+	for _, bad := range []string{"", "ops@push.example", "mailto:nobody", "http://push.example", "https://", "ftp://push.example"} {
+		assert.Error(t, ValidateVAPIDSubject(bad), bad)
+	}
+}
+
 func TestRegistrySyncAndList(t *testing.T) {
 	ctx := context.Background()
 	r := NewRegistry(testdb.Pool(t))
