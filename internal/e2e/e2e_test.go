@@ -3,8 +3,9 @@
 // Package e2e drives a running gateway through instance registration, domain verification,
 // signed requests, key rotation, recovery, device subscriptions, push delivery and
 // deregistration. The test plays the instance, serving the well-known document the gateway
-// verifies against, and plays APNs and FCM with the fakes in providertest. Start the stack
-// with docker-compose.e2e.yml and run `make e2e`.
+// verifies against, plays APNs and FCM with the fakes in providertest, and plays a browser and
+// its push service with the Web Push fake. Start the stack with docker-compose.e2e.yml and
+// run `make e2e`.
 package e2e
 
 import (
@@ -48,11 +49,15 @@ var (
 	listenAddr = env("E2E_LISTEN", ":18080")
 	apnsAddr   = env("E2E_APNS_LISTEN", ":18081")
 	fcmAddr    = env("E2E_FCM_LISTEN", ":18082")
+	webAddr    = env("E2E_WEBPUSH_LISTEN", ":18083")
+	// webPushBase is how the gateway reaches the fake push service; browsers subscribe there.
+	webPushBase = env("E2E_WEBPUSH_URL", "http://host.docker.internal:18083/push")
 	// secrets holds the credentials internal/e2e/gen wrote for the gateway.
 	secrets = env("E2E_SECRETS", filepath.Join("..", "..", ".e2e"))
 
 	fakeAPNs = providertest.NewAPNs()
 	fakeFCM  = providertest.NewFCM("e2e-project")
+	fakeWeb  = providertest.NewWebPush()
 )
 
 // wellKnown serves the stand-in instance's /.well-known/gotalk-instance.
@@ -92,7 +97,8 @@ func TestMain(m *testing.M) {
 	os.Exit(code)
 }
 
-// startFakes serves APNs and FCM fakes that check the gateway signs with the generated keys.
+// startFakes serves APNs, FCM and Web Push fakes that check the gateway signs with the
+// generated keys.
 func startFakes() error {
 	p8, err := os.ReadFile(filepath.Join(secrets, "apns.p8"))
 	if err != nil {
@@ -123,6 +129,9 @@ func startFakes() error {
 	}
 	fakeFCM.Key = &k.(*rsa.PrivateKey).PublicKey
 	if _, _, err := providertest.Serve(apnsAddr, fakeAPNs); err != nil {
+		return err
+	}
+	if _, _, err := providertest.Serve(webAddr, fakeWeb); err != nil {
 		return err
 	}
 	_, _, err = providertest.Serve(fcmAddr, fakeFCM)
@@ -294,9 +303,10 @@ func waitPush(t *testing.T, pushID string, k *key) result {
 	}
 }
 
-func TestPushFlow(t *testing.T) {
-	fakeAPNs.Reset()
-	fakeFCM.Reset()
+// activeInstance registers the stand-in instance with a fresh key and verifies it. The
+// instance is deregistered when the test ends.
+func activeInstance(t *testing.T) (string, *key) {
+	t.Helper()
 	k := newKey(t)
 	publish(t)
 	reg := expect(t, do(t, "POST", "/v1/instances", map[string]any{
@@ -307,6 +317,13 @@ func TestPushFlow(t *testing.T) {
 	publish(t, k)
 	expect(t, do(t, "POST", "/v1/instances/"+id+"/verify", nil, k), 200, "")
 	t.Cleanup(func() { do(t, "DELETE", "/v1/instances/"+id, nil, k) })
+	return id, k
+}
+
+func TestPushFlow(t *testing.T) {
+	fakeAPNs.Reset()
+	fakeFCM.Reset()
+	id, k := activeInstance(t)
 
 	iosToken := strings.Repeat("ef", 32)
 	ios := expect(t, do(t, "POST", "/v1/devices", map[string]any{
@@ -363,4 +380,51 @@ func TestPushFlow(t *testing.T) {
 	usage := inst.body["usage"].(map[string]any)
 	assert.Equal(t, 3.0, usage["pushes_accepted"])
 	assert.Equal(t, 1.0, usage["pushes_failed"])
+}
+
+// TestWebPushFlow plays a browser: it subscribes at the fake push service with the VAPID key
+// from discovery, registers the endpoint, and receives a push that the stand-in instance
+// encrypted to the browser's keys.
+func TestWebPushFlow(t *testing.T) {
+	fakeWeb.Reset()
+	_, k := activeInstance(t)
+
+	disc := expect(t, do(t, "GET", "/v1/gateway", nil, nil), 200, "")
+	app := disc.body["apps"].([]any)[0].(map[string]any)
+	vapid := app["platforms"].(map[string]any)["web"].(map[string]any)["vapid_public_key"].(string)
+	fakeWeb.PublicKey = vapid
+
+	sub := fakeWeb.Subscribe(webPushBase)
+	device := expect(t, do(t, "POST", "/v1/devices", map[string]any{
+		"app_id": "gotalk", "instance_origin": origin, "platform": "web", "endpoint": sub.Endpoint,
+	}, nil), 201, "").body["subscription_id"].(string)
+
+	plaintext := `{"v":1,"instance":"` + origin + `","type":"mention","notification_id":"ntf_web_1"}`
+	body, err := providertest.Encrypt(sub.P256dh, sub.Auth, []byte(plaintext), 64)
+	require.NoError(t, err)
+	acc := expect(t, do(t, "POST", "/v1/push", map[string]any{
+		"subscription_id": device, "mode": "encrypted", "notification_id": "ntf_web_1",
+		"payload": base64.RawURLEncoding.EncodeToString(body), "urgency": "high", "ttl": 120, "collapse_key": "c_web",
+	}, k), 202, "")
+	st := waitPush(t, acc.body["push_id"].(string), k)
+	assert.Equal(t, "sent", st.body["status"], fmt.Sprint(st.body))
+	reqs := fakeWeb.Requests(sub.Token)
+	require.Len(t, reqs, 1)
+	require.NoError(t, reqs[0].DecryptErr)
+	assert.Equal(t, plaintext, string(reqs[0].Plaintext), "the browser decrypts the instance's notification")
+	assert.Equal(t, "high", reqs[0].Header.Get("Urgency"))
+	assert.Equal(t, "c_web", reqs[0].Header.Get("Topic"))
+
+	// The browser unsubscribes: the push service answers 410 and the subscription is gone.
+	fakeWeb.Respond(sub.Token, providertest.Response{Status: 410})
+	body, err = providertest.Encrypt(sub.P256dh, sub.Auth, []byte(`{"v":1}`), 0)
+	require.NoError(t, err)
+	push := map[string]any{
+		"subscription_id": device, "mode": "encrypted", "notification_id": "ntf_web_2",
+		"payload": base64.RawURLEncoding.EncodeToString(body),
+	}
+	acc = expect(t, do(t, "POST", "/v1/push", push, k), 202, "")
+	st = waitPush(t, acc.body["push_id"].(string), k)
+	assert.Equal(t, "gone", st.body["status"], fmt.Sprint(st.body))
+	expect(t, do(t, "POST", "/v1/push", push, k), 410, "subscription_gone")
 }

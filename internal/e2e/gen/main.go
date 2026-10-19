@@ -1,7 +1,7 @@
 // Command gen writes throwaway provider credentials and a gateway config for the end-to-end
 // test into a directory (default .e2e), which docker-compose.e2e.yml mounts into the
-// gateway. The config points APNs and FCM at the fakes the test serves on the host. The keys
-// are generated on every run and never committed.
+// gateway. The config points APNs and FCM at the fakes the test serves on the host, and gives
+// the web app a fresh VAPID key. The keys are generated on every run and never committed.
 package main
 
 import (
@@ -34,7 +34,10 @@ apps:
         service_account_file: /etc/gotalk-gateway/e2e/fcm.json
         endpoint: {{host}}:18082
     web:
-      vapid_public_key: BExMJ__m8K0lZhFzYG_SNZhoRmRL6BbVOMd25fGlwCN2uGyylC_WegHE-InIhLxpzs3kl6KqUfAS6lMIoFdne2Y
+      vapid_public_key: {{vapid_public_key}}
+      vapid:
+        private_key_file: /etc/gotalk-gateway/e2e/vapid.key
+        subject: mailto:ops@gateway.example
 `
 
 func main() {
@@ -54,10 +57,13 @@ func run(dir string) error {
 	}
 	p8, _ := providertest.NewAPNsKey()
 	sa, _ := providertest.NewServiceAccount("e2e-project", fakesHost+":18082/token")
+	vapidPrivate, vapidPublic := providertest.NewVAPIDKey()
+	cfg := strings.NewReplacer("{{host}}", fakesHost, "{{vapid_public_key}}", vapidPublic).Replace(config)
 	files := map[string][]byte{
 		"apns.p8":     p8,
 		"fcm.json":    sa,
-		"config.yaml": []byte(strings.ReplaceAll(config, "{{host}}", fakesHost)),
+		"vapid.key":   []byte(vapidPrivate),
+		"config.yaml": []byte(cfg),
 	}
 	for name, data := range files {
 		// World-readable so the container's non-root user can read the test-only keys.

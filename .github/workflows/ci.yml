@@ -86,13 +86,13 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version-file: go.mod
-      # Throwaway APNs and FCM credentials and a config pointing at the test's provider fakes.
+      # Throwaway APNs, FCM and VAPID credentials and a config pointing at the test's provider fakes.
       - run: go run ./internal/e2e/gen .e2e
       - run: docker compose up -d --build --wait --wait-timeout 180
       - run: ./scripts/smoke.sh http://localhost:8090
       # Registers an instance against the real binary, verifies it through the test's own
       # well-known server, exercises signed requests, replay, rotation and recovery, and
-      # delivers pushes to fake APNs and FCM servers, including retries and dead tokens.
+      # delivers pushes to fake APNs, FCM and Web Push servers, including retries and dead tokens.
       - run: go test -count=1 -tags e2e ./internal/e2e
       - name: Graceful shutdown
         run: |
