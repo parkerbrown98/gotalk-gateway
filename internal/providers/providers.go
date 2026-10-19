@@ -1,5 +1,5 @@
 // Package providers defines how the gateway hands a push to a platform provider (APNs, FCM
-// and, from Phase 5, Web Push) and how provider failures map to the protocol's outcomes. The
+// and Web Push) and how provider failures map to the protocol's outcomes. The
 // provider clients live in subpackages; docs/payload.md specifies what each one sends.
 package providers
 
@@ -55,7 +55,7 @@ type Target struct {
 
 // Provider delivers to one platform of one app.
 type Provider interface {
-	// Name labels metrics and logs: "apns" or "fcm".
+	// Name labels metrics and logs: "apns", "fcm" or "webpush".
 	Name() string
 	// Send delivers m. Failures are *Error.
 	Send(ctx context.Context, t Target, m Message) error

@@ -1,6 +1,6 @@
-// Package providertest has fake APNs and FCM servers for tests and the end-to-end suite. The
-// fakes record every push, verify the gateway's credentials, and answer with scripted
-// responses so retry, backoff and dead-token handling can be exercised.
+// Package providertest has fake APNs, FCM and Web Push servers for tests and the end-to-end
+// suite. The fakes record every push, verify the gateway's credentials, and answer with
+// scripted responses so retry, backoff and dead-token handling can be exercised.
 package providertest
 
 import (
@@ -41,10 +41,15 @@ type Response struct {
 type Request struct {
 	Token  string
 	Header http.Header
-	// Body is the decoded JSON body.
-	Body  map[string]any
-	Proto int
-	At    time.Time
+	// Body is the decoded JSON body (APNs and FCM).
+	Body map[string]any
+	// Raw is the request body (Web Push), and Plaintext what the subscribed browser
+	// decrypted from it, or DecryptErr.
+	Raw        []byte
+	Plaintext  []byte
+	DecryptErr error
+	Proto      int
+	At         time.Time
 }
 
 type recorder struct {
