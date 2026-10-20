@@ -142,7 +142,8 @@ Deliverables:
   [accounts-and-logistics.md](accounts-and-logistics.md); needs the publisher to create the accounts and choose the
   name and domain
 - ⬜ iOS Notification Service Extension prototype that decrypts an RFC 8291 body (the risk table's Phase 0 item); the
-  envelope stays draft until it passes
+  envelope stays draft until it passes. The client now ships this extension (Phase 7), and its crypto passes the
+  RFC 8291 vector with `swift-crypto`. What remains is a run on a device.
 - ⬜ Review of the protocol, threat model and OpenAPI
 
 ### Phase 1 — Foundation ✅
@@ -483,9 +484,12 @@ Deliverables (all in `gotalk-server`; the guide is its
 - 🟨 Open for review: a direct-message conversation pushes once until it is read (the server keeps one unread DM
   notification per conversation); and the server, not the client, holds back pushes for presence `dnd`.
 
-### Phase 7 — `gotalk-client` integration ⬜
+### Phase 7 — `gotalk-client` integration 🟨
 
 Work happens in `gotalk-client`.
+
+Status: everything is built and the browser path is verified end to end against this gateway. The iOS and Android
+device runs are still open, since they need the Apple and Firebase accounts from Phase 0.
 
 - Permission flow and per-instance enable/disable in settings, plus per-category toggles.
 - Device keypair generation and secure storage; registration with the gateway and with the instance; token
@@ -499,6 +503,63 @@ Work happens in `gotalk-client`.
 - Tests on real devices for iOS and Android, since simulators do not cover push.
 
 Done when a push for a mention on an iOS device, an Android device and a browser opens the right screen.
+
+Deliverables (all in `gotalk-client`; the guide is its
+[docs/push-notifications.md](https://github.com/parkerbrown98/gotalk-client/blob/main/docs/push-notifications.md)):
+
+- ✅ `@gotalk/core`:
+  - `push.ts`: a client for discovery and `POST`/`PUT`/`DELETE /v1/devices` with problem-document errors; app
+    selection by bundle ID, package name or the VAPID key that both the gateway and the instance list; parsers for
+    the v1 plaintext and the FCM and APNs envelopes; display text that always carries the instance's name;
+    channels per category; `/notification` deep links; and `planPushSync` (register, update, refresh, unregister).
+  - `push-crypto.ts`: P-256 keys and RFC 8291 decryption with `@noble`, tested against Appendix A both ways.
+- ✅ Settings > Notifications:
+  - the per-device and per-instance switch, with permission asked only from a tap;
+  - the account's categories through `PUT /users/@me/push-preferences`;
+  - the account's push devices, with Remove;
+  - explanations for blocked permission, a server without push or not verified, the desktop app, Safari on iPhone
+    outside a Home Screen app, Brave, and an app the gateway does not serve.
+- ✅ Registration: discovery, `POST /v1/devices` for the instance origin, then the keys to the instance. The
+  subscription secret stays on the device.
+  - Keys are generated per subscription and stored with `expo-secure-store`. On iOS they are in the App Group
+    keychain group shared with the extension.
+  - The client refreshes after 7 days, sends a new token or endpoint with `PUT`, registers again after `404`/`409`,
+    a new session, gateway URL or VAPID key, and checks once per launch that the instance still has the
+    subscription.
+  - The registration is removed on sign-out (before the session ends), on remote sign-out, on account deletion and
+    when an instance is removed.
+- ✅ Android:
+  - an `expo-task-manager` task that decrypts FCM data messages in every app state, fetches `id_only` notifications
+    with the stored session, and posts them to one channel per category (high, default or low importance);
+  - a repeated notification ID replaces the earlier notification.
+  - Gap: grouping is the system's per-app bundling, because `expo-notifications` exposes no group key.
+- ✅ iOS:
+  - a Swift Notification Service Extension (CryptoKit) built by `@bacons/apple-targets` with EAS `appExtensions`
+    credentials;
+  - it sets title, instance subtitle, body, thread, badge and tap target;
+  - `id_only` pushes are fetched with the app's last shared access token, falling back to `GT_NEW_NOTIFICATION`
+    (shipped in `Localizable.strings`).
+  - Its crypto and payload code is checked against RFC 8291 Appendix A with `swift-crypto`, and `expo prebuild`
+    output was inspected. It has not run on a device.
+- ✅ Web:
+  - a service worker that shows each push with the instance's name, groups by thread with `tag`, replaces
+    duplicates, sets the badge, and focuses or opens the app on a click;
+  - a manifest for iOS Home Screen installs;
+  - one browser subscription shared by every instance (a second VAPID key is refused with an explanation).
+- ✅ Deep links: `/notification?instance=…&…` switches instance, marks the notification read, and opens the
+  conversation or channel at the message, the topic or the place (the inbox otherwise).
+- ✅ Suppression: a push for the instance on screen with a live realtime connection is not shown, on every platform.
+- ✅ Browser end to end, against this gateway in development mode with a local `gotalk-server`, in Chrome:
+  - turning push on registered a real FCM endpoint;
+  - a direct message became a push that FCM accepted, and the notification showed "Gotalk ·" with the text;
+  - clicking it opened the conversation;
+  - a second push while the app was open and live was delivered and not shown.
+- ⬜ iOS and Android device runs, and a mention on each that opens the right screen. These need the Apple Developer
+  push key and the Firebase project (Phase 0 accounts), plus `ios.appleTeamId`.
+- 🟨 Notes for review:
+  - Push services reject subscriptions from automated browsers (Playwright-launched Chrome got `410 Gone` each
+    time), so browser delivery cannot run in CI without a real browser profile.
+  - The desktop (Tauri) app has no push yet; that stays with the client plan's desktop notifications.
 
 **Milestone A:** Phases 0–7 give working push end to end, free and unmetered, on a staging gateway.
 
